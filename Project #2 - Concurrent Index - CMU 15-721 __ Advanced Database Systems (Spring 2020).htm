@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en"
+      xmlns:og="http://ogp.me/ns#"
+      xmlns:fb="https://www.facebook.com/2008/fbml">
+<head>
+    <title>Project #2 - Concurrent Index - CMU 15-721 :: Advanced Database Systems (Spring 2020)</title>
+    <!-- Using the latest rendering mode for IE -->
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link href="https://db.cs.cmu.edu/favicon.png" rel="icon">
+
+<link rel="canonical" href="./project2.html">
+
+        <meta name="author" content="Andy Pavlo" />
+        <meta name="description" content="Overview For this project, you are required to implement an in-memory B+Tree in CMU&#39;s yet-to-be-named DBMS. The primary goal is to understand the nuances of concurrency control in a modern, order-preserving indexing data structure. Here&#39;s a list of useful references on latch-free data structures: Modern B-Tree Methods Techniques for Implementing Concurrent Data Structures on Modern Multicore Machines stx::B+tree (replaced by tlx::B+Tree) Making B+Trees Cache Conscious in Main Memory IMPORTANT: This is an open-ended assignment. There are several design choices to be made while implementing a concurrent data structure. Do not expect us to guide …" />
+
+    <meta property="og:site_name" content="CMU 15-721" />
+    <meta property="og:type" content="article"/>
+    <meta property="og:title" content="Project #2 - Concurrent Index - CMU 15-721 :: Advanced Database Systems (Spring 2020)"/>
+    <meta property="og:url" content="./project2.html"/>
+    <meta property="article:published_time" content="2020-02-20" />
+    <meta property="og:description" content="Overview For this project, you are required to implement an in-memory B+Tree in CMU&#39;s yet-to-be-named DBMS. The primary goal is to understand the nuances of concurrency control in a modern, order-preserving indexing data structure. Here&#39;s a list of useful references on latch-free data structures: Modern B-Tree Methods Techniques for Implementing Concurrent Data Structures on Modern Multicore Machines stx::B+tree (replaced by tlx::B+Tree) Making B+Trees Cache Conscious in Main Memory IMPORTANT: This is an open-ended assignment. There are several design choices to be made while implementing a concurrent data structure. Do not expect us to guide …" />
+        <meta property="og:image"
+              content="https://15721.courses.cs.cmu.edu/spring2020/images/twitter-card.jpg"/>
+
+    <meta name="twitter:card" content="summary">
+        <meta name="twitter:site" content="@CMUDB">
+        <meta name="twitter:creator" content="@CMUDB">
+    <meta name="twitter:domain" content=".">
+            <meta property="twitter:image"
+                  content="https://15721.courses.cs.cmu.edu/spring2020/images/twitter-card.jpg"/>
+
+    <!-- Bootstrap -->
+        <link rel="stylesheet" href="./theme/css/bootstrap.flatly.min.css" type="text/css"/>
+    <link href="./theme/css/font-awesome.min.css" rel="stylesheet">
+<!--     <link href="https://cdnjs.cloudflare.com/ajax/libs/typicons/2.0.9/typicons.min.css" rel="stylesheet"> -->
+
+    <link href="./theme/css/pygments/monokai.css" rel="stylesheet">
+    <link rel="stylesheet" href="./theme/css/style.css" type="text/css"/>
+
+
+</head>
+<body>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+<!-- <script src="https://code.jquery.com/jquery-2.2.4.min.js" integrity="sha256-BbhdlvQf/xTY9gja0Dq3HiwQF8LaCRTXxZKRutelT44=" crossorigin="anonymous"></script> -->
+
+<div class="navbar navbar-default navbar-fixed-top" role="navigation">
+    <div class="container">
+        <div class="navbar-header">
+            <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-ex1-collapse">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+            </button>
+            <a href="./" class="navbar-brand">
+<img src="./images/logo.png" width="32"/> CMU 15-721            </a>
+        </div>
+        <div class="collapse navbar-collapse navbar-ex1-collapse">
+            <ul class="nav navbar-nav">
+                            <li><a href="./projects.html">Projects</a>
+                            <li><a href="./schedule.html">Schedule</a>
+                            <li><a href="./syllabus.html">Syllabus</a>
+            
+                <!---->
+            </ul>
+            <ul class="nav navbar-nav navbar-right">
+                <li> <a title="Youtube" href="https://www.youtube.com/playlist?list=PLSE8ODhjZXjasmrEd2_Yi1deeE360zv5O" target="_new"><i class="fa fa-youtube"></i> Youtube</a>
+                <li> <a title="Piazza" href="https://piazza.com/cmu/spring2020/15721/home" target="_new"><i class="fa fa-comments-o"></i> Piazza</a>
+                
+                <li><a href="#" class="dropdown-toggle" data-toggle="dropdown" data-hover="dropdown" data-delay="1000" data-close-others="true"> <i class="fa fa-book"></i> Archives <span class="caret"></span></a>
+                <ul class="dropdown-menu" role="menu">
+                    <li><a onclick="javascript:pageTracker._trackPageview('/outgoing/15721.courses.cs.cmu.edu');" href="https://15721.courses.cs.cmu.edu/spring2019/" target="_new">Spring 2019</a></li>
+                    <li><a onclick="javascript:pageTracker._trackPageview('/outgoing/15721.courses.cs.cmu.edu');" href="https://15721.courses.cs.cmu.edu/spring2018/" target="_new">Spring 2018</a></li>
+                    <li><a onclick="javascript:pageTracker._trackPageview('/outgoing/15721.courses.cs.cmu.edu');" href="https://15721.courses.cs.cmu.edu/spring2017/" target="_new">Spring 2017</a></li>
+                    <li><a onclick="javascript:pageTracker._trackPageview('/outgoing/15721.courses.cs.cmu.edu');" href="https://15721.courses.cs.cmu.edu/spring2016/" target="_new">Spring 2016</a></li>
+                </ul></li>
+            </ul>
+        </div>
+        <!-- /.navbar-collapse -->
+    </div>
+</div> <!-- /.navbar -->
+
+<div class="container">
+    <div class="row">
+        <div class="col-lg-12">
+
+
+    <section id="content" class="body">
+        <h1 class="entry-title">Project #2 - Concurrent Index</h1>
+<!--         <footer class="post-info"> -->
+            <span class="published" style="float: right;">
+            <i class="fa fa-calendar"></i><time datetime="2020-02-20 12:46:34.438458-05:00"> <B>Last Updated:</B> Feb 20, 2020</time>
+            </span>
+<!--         </footer> -->
+        
+        
+        <div class="entry-content">
+            <h2>Overview</h2>
+<p>For this project, you are required to implement an in-memory <a onclick="javascript:pageTracker._trackPageview('/outgoing/en.wikipedia.org');" href="https://en.wikipedia.org/wiki/B%2B_tree">B+Tree</a> in CMU's <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier">yet-to-be-named DBMS</a>. The primary goal is to understand the nuances of concurrency control in a modern, order-preserving indexing data structure.</p>
+<p>Here's a list of useful references on latch-free data structures:</p>
+<ul>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/news.ycombinator.com');" href="https://news.ycombinator.com/item?id=15409757">Modern B-Tree Methods</a></li>
+<li><a onclick="javascript:pageTracker._trackPageview('/downloads/~stephentu/presentations/workshop.pdf');" href="http://www.cs.berkeley.edu/~stephentu/presentations/workshop.pdf">Techniques for Implementing Concurrent Data Structures on Modern Multicore Machines</a></li>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/panthema.net');" href="http://panthema.net/2007/stx-btree/">stx::B+tree</a> (replaced by <a onclick="javascript:pageTracker._trackPageview('/outgoing/tlx.github.io');" href="https://tlx.github.io/">tlx::B+Tree</a>)</li>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/dl.acm.org');" href="https://dl.acm.org/doi/10.1145/342009.335449">Making B+Trees Cache Conscious in Main Memory</a></li>
+</ul>
+<p><strong>IMPORTANT:</strong> This is an open-ended assignment. There are several design choices to be made while implementing a concurrent data structure. Do not expect us to guide you in making every one of these design choices.
+<!-- In general, try to export an interface in your B+Tree that is similar to that of the <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/bingmann/stx-btree/blob/master/include/stx/btree.h">STX B+tree</a>. --></p>
+<p>This is a <strong>group</strong> project. Each group must have exactly <strong>three</strong> members unless given prior authorization by the instructor.</p>
+<!-- START project2 -->
+
+<!-- AUTO-GENERATED BY GENERATE-SCHEDULE SCRIPT -->
+
+<!-- ANY MODIFICATIONS WILL BE OVERWRITTEN -->
+
+<ul>
+<li><b>Release Date:</b> Feb 17, 2020</li>
+<li><b>Due Date:</b> Mar 15, 2020 @ 11:59pm
+<!-- END project2 --></li>
+</ul>
+<!-- **************************************************** -->
+
+<!-- IMPLEMENTATION                                       -->
+
+<!-- **************************************************** -->
+
+<h2>Implementation Details</h2>
+<p>In this assignment, you will need to modify at most these <strong>five</strong> files:</p>
+<ul>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/storage/index/bplustree.cpp">B+Tree Data Structure source file</a> </li>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/storage/index/bplustree.h">B+Tree Data Structure header file</a></li>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/storage/index/bplustree_index.cpp">B+Tree Index source file</a> </li>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/storage/index/bplustree_index.h">B+Tree Index header file</a></li>
+<li><a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/test/storage/bplustree_test.cpp">B+Tree Data Structure testing suite</a>  </li>
+</ul>
+<p><strong>IMPORTANT:</strong> The "Data Structure" files are the actual B+Tree implementation. The "Index" files are a wrapper that implements our DBMS's <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/storage/index/index.h">index API</a>. The index wrapper is mostly implemented for you already. The logic for performing visibility checks in the DataTable, deferring actions for correct visibility, etc. are all adapted from the BwTreeIndex wrapper. All that remains is to make the correct calls into your B+Tree Data Structure's API. See the FIXME comments in BPlusTreeIndex.</p>
+<p>The DBMS also contains a <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/third_party/bwtree/bwtree.h">Bw-Tree index</a> you can use as a reference to better understand how the different arguments work.</p>
+<p>Your B+Tree implementation must abstract away the details of the key data type and associated comparator and equality checker, like this:
+<pre>
+template &lt;typename KeyType, 
+          typename ValueType,
+          typename KeyComparator,
+          typenameKeyEqualityChecker,
+          typename ValueEqualityChecker&gt;
+class BPlusTreeIndex {
+};
+</pre></p>
+<p>These classes are already implemented for you:</p>
+<ul>
+<li><code>KeyType</code>: The type of each key in the index. This will either be a <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/storage/index/generic_key.h"><code>GenericKey</code></a> or <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/storage/index/compact_ints_key.h"><code>CompactIntsKey</code></a>.</li>
+<li><code>KeyComparator</code>: The class used to compare whether two <code>KeyType</code> instances are less/greater-than each other. These will be included in the <code>KeyType</code> implementation files.</li>
+<li><code>KeyEqualityChecker</code>: The class used to compare whether two <code>KeyType</code> instances are equivalent. These will be included in the <code>KeyType</code> implementation files.</li>
+<li><code>ValueEqualityChecker</code>: The class used to compare whether two <code>ValueType</code> instances are equivalent. This is needed to support non-unique indexes.</li>
+</ul>
+<h3>Requirements</h3>
+<p>Your index must optionally support <strong>duplicate keys</strong> with different values (i.e., this should be a configurable parameter).</p>
+<p>You must support both <strong>forward</strong> and <strong>reverse</strong> iterators that work correctly with concurrent <strong>mutators</strong>.</p>
+<p>The functionality of your index implementation must match the specification given in the DBMS's <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/storage/index/index.h">index API</a>. More details are in the Doxygen documentation, but at a high level:</p>
+<ul>
+<li>The <code>Insert</code> function inserts a new key-value pair into the index, used for non-unique key indexes.</li>
+<li>The <code>Delete</code> function doesn't immediately call delete on the underlying index. It registers a commit action in the txn that will eventually register a deferred action for the GC to safely call delete on the index when no more transactions need to access the key.</li>
+<li>The <code>InsertUnique</code> function inserts a new key-value pair only if any matching keys have TupleSlots that don't conflict with the calling txn</li>
+<li>The <code>ScanKey</code> function finds all the values associated with the given key in our index.</li>
+<li>The <code>ScanAscending</code> function finds all the values between the given keys in our index, sorted in ascending order.</li>
+<li>The <code>ScanDescending</code> function finds all the values between the given keys in our index, sorted in descending order.</li>
+<li>The <code>ScanLimitDescending</code> function finds the first limit # of values between the given keys in our index, sorted in descending order.</li>
+<li>The <code>PerformGarbageCollection</code> function garbage collects deleted index entries. This function is only necessary if you are doing epoch-based GC (i.e., memory pool).</li>
+<li>The <code>GetHeapUsage</code> function returns the amount of heap space used by the index. </li>
+</ul>
+<p><strong>IMPORTANT:</strong> Your B+Tree implementation should mimic the existing <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/third_party/bwtree/bwtree.h">Bw-Tree index</a>. If you are not sure about what the correct output or behavior should be for your index, then exercise the <code>BwTree</code> and see what data it returns. Your index implementation should be a drop-in replacement for it.</p>
+<p>You should add an utility function to validate the <strong>structural integrity</strong> of the index data structure. If any of the integrity checks fail, then this function should fix the integrity issue. We cannot provide you with this because we do not know your internal representation. This functionality is similar to what <a onclick="javascript:pageTracker._trackPageview('/outgoing/www.adminschoice.com');" href="http://www.adminschoice.com/repairing-unix-file-system-fsck"><code>fsck</code></a> provides for a file system.</p>
+<p>You should implement a latch-free memory tracker if doing epoch-based GC. We will discuss different methods next week.</p>
+<p>You should add multiple <strong>unit test cases</strong> in the <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/test/storage/bplustree_test.cpp"><code>BPlusTreeTests</code> testing suite</a> to test the functionality of your index data structure.</p>
+<p>You must ensure that your branch can pass our repository's coding standards checks. Your branch will be tested with:</p>
+<pre>
+make check-format
+make check-lint
+make check-censored
+make check-clang-tidy
+doxygen apidoc/Doxyfile.in
+</pre>
+
+<p>There should not be any failures from these checks, so please run them before submitting.</p>
+<h3>Testing</h3>
+<p>You can test the concurrent index by making use of the <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/test/storage/bplustree_index_test.cpp"><code>BPlusTreeIndexTests</code> testing suite</a>. The testing suite contains a set of single and multi-threaded test cases designed to validate the functionality and correctness of the BPlusTreeIndex wrapper.</p>
+<p>You should write data structure test cases against your API in <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/test/storage/bplustree_test.cpp"><code>BPlusTreeTests</code> testing suite</a>. You should exercise both simple and complex data structure access patterns, as well as the required functionality like heap usage and (possibly) garbage collection.</p>
+<p>Lastly, the <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/test/integration/tpcc_test.cpp">TPC-C unit test</a> has been modified to run using the <code>BPlusTreeIndex</code> instead of the <code>BwTreeIndex</code> and evaluate the correctness. You can really on this as an extra sanity check that your index is working correctly, but will probably be too complex to debug with easily.</p>
+<p>For performance testing, there is a simple <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/test/integration/tpcc_test.cpp">index wrapper benchmark</a> that you can use to evaluate the performance of your <code>BPlusTreeIndex</code> against the <code>BwTreeIndex</code>. Note that this only profiles point-query lookups, rather than range scans. If you want to fully evaluate the performance of your <code>BPlusTreeIndex</code>, then you will need to write more benchmarks.</p>
+<!-- **************************************************** -->
+
+<!-- INSTRUCTIONS                                         -->
+
+<!-- **************************************************** -->
+
+<h2>Instructions</h2>
+<p class="warning bg-info">
+<i class="trigger fa fa-info-circle fa-lg"></i>
+You must use the <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/tree/15721-s20-project2"><b>15721-s20-project2</b></a> branch instead of the master branch for this project.
+</p>
+
+<p>We assume that you have already setup the project repository and the development environment following the instructions in the first assignment. We have added new files for this project. You should ensure that the latest changes in the online repository are propagated to your local repository by using these commands:</p>
+<pre>
+git remote add upstream git://github.com/cmu-db/terrier.git
+git fetch upstream
+git rebase -i upstream/15721-s20-project2
+</pre>
+
+<h3>Development Hints</h3>
+<ol>
+<li>
+<p>To reduce the number of memory allocations, you will want to reuse memory. You can use the DBMS's existing <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/master/src/include/execution/sql/memory_pool.h"><code>MemoryPool</code></a> implementation instead of rolling your own.</p>
+</li>
+<li>
+<p>Instead of using <code>std::cout</code> statements for debugging, use the <code>INDEX_LOG_*</code> macros for logging information like this:
+   <pre>INDEX_LOG_INFO("Nested loop join executor -- %d children", num_children);
+INDEX_LOG_DEBUG("Advance the right buffer iterator.");</pre>
+   More information is available <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/wiki/Debug-Logging">here</a>. There is already an <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/loggers/index_logger.h">index logger class</a> that can be included in your source files for access to these various debug logging macros.</p>
+</li>
+<li>
+<p>Test-driven development can be useful while building your data structure since there is already a reference solution for these tests with the BwTreeIndex. It can be helpful to disable all of the relevant tests (since they'll all fail at the start of the project anyway), and then  enable them as you target specific features.</p>
+</li>
+<li>
+<p>For performance and correctness reasons, you should use an <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/cmu-db/terrier/blob/15721-s20-project2/src/include/common/allocator.h">aligned memory allocator</a> (not necessarily this one) for node allocations and be mindful of how you reinterpret the buffer if you intend to perform std::atomic operations.</p>
+</li>
+</ol>
+<!-- **************************************************** -->
+
+<!-- GRADING                                              -->
+
+<!-- **************************************************** -->
+
+<h2>Grading Rubric</h2>
+<p>Each project submission will be graded based on the following criteria:</p>
+<ol>
+<li>Does the submission successfully execute all of the test cases and produce the correct answer?</li>
+<li>Does the submission execute without any memory leaks according to <a onclick="javascript:pageTracker._trackPageview('/outgoing/github.com');" href="https://github.com/google/sanitizers">ASAN</a>?</li>
+<li>Does the submission implement the API correctly?</li>
+<li>Does the submission contain functions that perform unit testing and validate structural integrity?</li>
+<li>Does the submission use the proper formatting, coding style, and documentation for its source code?</li>
+</ol>
+<p>Note that we will use additional test cases that are more complex and go beyond the sample test cases that we provide you.</p>
+<p>Bonus points will be given to the <strong>top 3</strong> groups with the fastest implementations. The amount of bonus points given to these groups with the best implementations is left up to the discretion of the instructor and contingent on an additional evaluation of the source code.</p>
+<!-- **************************************************** -->
+
+<!-- LATE POLICY                                          -->
+
+<!-- **************************************************** -->
+
+<h2 id="late-policy">Late Policy</h2>
+
+<p>25% will deducted from the final score of the project for every 24-hour period that the assignment is late.</p>
+<p>Only in extreme circumstances (e.g., medical emergencies) no-penalty extensions will be granted. The student is required to provide written documentation from the University health center. Please contact the instructor if you have any questions.</p>
+<!-- **************************************************** -->
+
+<!-- SUBMISSION                                           -->
+
+<!-- **************************************************** -->
+
+<h2 id="submission">Submission</h2>
+
+<p>You can submit your implementation of these files to 
+Gradescope (<a onclick="javascript:pageTracker._trackPageview('/outgoing/www.gradescope.com');" href="https://www.gradescope.com/courses/81879">https://www.gradescope.com/courses/81879</a>).</p>
+<p><b>Important:</b> Use the Gradescope course code announced on Piazza.</p>
+<!-- **************************************************** -->
+
+<!-- COLLABORATION POLICY                                 -->
+
+<!-- **************************************************** -->
+
+<h2>Collaboration Policy</h2>
+<ul>
+<li>Everyone has to work in a <strong>team of three people</strong> for this assignment.</li>
+<li>Groups are allowed to discuss high-level details about the project with others.</li>
+<li>Groups are <strong>not</strong> allowed to copy the contents of a white-board after a group meeting with other students.</li>
+<li>Groups are <strong>not</strong> allowed to copy the solutions from other colleagues.</li>
+</ul>
+<p class="warning bg-danger">
+    <i class="trigger fa fa-exclamation-triangle fa-lg"></i>
+    <b>WARNING:</b> All of the code for this project must be your own. You may not copy source code from other students or other sources that you find on the web. Plagiarism <b>will not</b> be tolerated. See CMU's <a onclick="javascript:pageTracker._trackPageview('/outgoing/www.cmu.edu');" href="https://www.cmu.edu/policies/student-and-student-life/academic-integrity.html">Policy on Academic Integrity</a> for additional information.
+</p>
+        </div>
+    </section>
+        </div>
+    </div>
+</div>
+<footer>
+   <div class="well well-lg" id="footer-well">
+      <div class="container">
+      
+      <div class="row">
+         <div class="col-xs-6">
+            <a onclick="javascript:pageTracker._trackPageview('/outgoing/db.cs.cmu.edu');" href="https://db.cs.cmu.edu" title="Carnegie Mellon Database Group" class="image-link"><img src="./images/cmu-db-group.svg" class="cmudb-logo" /></a>
+         </div>
+         <div class="col-xs-6">
+            <p class="pull-right"><i class="fa fa-arrow-up"></i> <a href="#">Back to top</a></p>
+        </div>
+      </div>
+   </div>
+   </div>
+</footer>
+<!-- Include all compiled plugins (below), or include individual files as needed -->
+<script src="./theme/js/bootstrap.min.js"></script>
+
+<!-- Enable responsive features in IE8 with Respond.js (https://github.com/scottjehl/Respond) -->
+<script src="./theme/js/respond.min.js"></script>
+
+<!-- Fix scrolling issues to internal HREFs that get positioned behind navbar -->
+<!-- http://stackoverflow.com/questions/10732690/offsetting-an-html-anchor-to-adjust-for-fixed-header -->
+<script src="./theme/js/href_scroll.js"></script>
+
+<!-- You know what this is and you know what he did to me... -->
+<script src="./theme/js/tim-kraska-betrayed-me.js"></script>
+
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-4067813-19"></script>
+    <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    
+    gtag('config', 'UA-4067813-19');
+    </script>
+    <!-- End Google Analytics Code -->
+
+</body>
+</html>
