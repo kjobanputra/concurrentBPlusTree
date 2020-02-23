@@ -20,7 +20,7 @@ class BPlusTree {
     LeafNode *next_;
   };
   class InteriorNode {
-    KeyType guideposts_[NUM_CHILDREN - 1];
+    KeyType guide_posts_[NUM_CHILDREN - 1];
     bool leaf_children_;
     union {
       InteriorNode *interiors_[NUM_CHILDREN];
@@ -31,6 +31,8 @@ class BPlusTree {
   InteriorNode *root_;
   uint32_t depth_;
   common::SpinLatch guard_;
+
+ public:
 };
 
 }  // namespace terrier::storage::index
