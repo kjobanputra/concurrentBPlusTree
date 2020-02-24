@@ -136,14 +136,12 @@ class BPlusTreeIndex final : public Index {
     index_key.SetFromProjectedRow(key, metadata_, metadata_.GetSchema().GetColumns().size());
 
     // Perform lookup in BPlusTree
-    // FIXME(15-721 project2): perform a lookup of the underlying data structure of the key
+    auto scan_itr = bplustree_->Begin(index_key);
 
-    // Avoid resizing our value_list, even if it means over-provisioning
-    value_list->reserve(results.size());
-
-    // Perform visibility check on result
-    for (const auto &result : results) {
-      if (IsVisible(txn, result)) value_list->emplace_back(result);
+    while (!scan_itr.IsEnd() && scan_itr.Key() == index_key) {
+      // Perform visibility check on result
+      if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
+      ++scan_itr;
     }
 
     TERRIER_ASSERT(!(metadata_.GetSchema().Unique()) || (metadata_.GetSchema().Unique() && value_list->size() <= 1),
@@ -166,7 +164,15 @@ class BPlusTreeIndex final : public Index {
     if (low_key_exists) index_low_key.SetFromProjectedRow(*low_key, metadata_, num_attrs);
     if (high_key_exists) index_high_key.SetFromProjectedRow(*high_key, metadata_, num_attrs);
 
-    // FIXME(15-721 project2): perform a lookup of the underlying data structure of the key
+    auto scan_itr = low_key_exists ? bplustree_->Begin(index_low_key) : bplustree_->Begin();
+
+    // Limit of 0 indicates "no limit"
+    while ((limit == 0 || value_list->size() < limit) && !scan_itr.IsEnd() &&
+           (!high_key_exists || scan_itr.Key().PartialLessThan(index_high_key, &metadata_, num_attrs))) {
+      // Perform visibility check on result
+      if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
+      ++scan_itr;
+    }
   }
 
   void ScanDescending(const transaction::TransactionContext &txn, const ProjectedRow &low_key,
@@ -178,7 +184,16 @@ class BPlusTreeIndex final : public Index {
     index_low_key.SetFromProjectedRow(low_key, metadata_, metadata_.GetSchema().GetColumns().size());
     index_high_key.SetFromProjectedRow(high_key, metadata_, metadata_.GetSchema().GetColumns().size());
 
-    // FIXME(15-721 project2): perform a lookup of the underlying data structure of the key
+    // Perform lookup in BwTree
+    auto scan_itr = bplustree_->Begin(index_high_key);
+    // Back up one element if we didn't match the high key
+    if (scan_itr.IsEnd() || scan_itr.Key() > index_high_key) --scan_itr;
+
+    while (!(scan_itr.IsEnd() || scan_itr.Key() < index_low_key)) {
+      // Perform visibility check on result
+      if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
+      --scan_itr;
+    }
   }
 
   void ScanLimitDescending(const transaction::TransactionContext &txn, const ProjectedRow &low_key,
@@ -192,7 +207,16 @@ class BPlusTreeIndex final : public Index {
     index_low_key.SetFromProjectedRow(low_key, metadata_, metadata_.GetSchema().GetColumns().size());
     index_high_key.SetFromProjectedRow(high_key, metadata_, metadata_.GetSchema().GetColumns().size());
 
-    // FIXME(15-721 project2): perform a lookup of the underlying data structure of the key
+    // Perform lookup in BwTree
+    auto scan_itr = bplustree_->Begin(index_high_key);
+    // Back up one element if we didn't match the high key
+    if (scan_itr.IsEnd() || scan_itr.Key() > index_high_key) --scan_itr;
+
+    while (value_list->size() < limit && !(scan_itr.IsEnd() || scan_itr.Key() < index_low_key)) {
+      // Perform visibility check on result
+      if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
+      --scan_itr;
+    }
   }
 };
 
