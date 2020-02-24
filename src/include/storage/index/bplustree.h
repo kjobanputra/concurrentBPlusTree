@@ -12,14 +12,16 @@ template <typename KeyType, typename ValueType, typename KeyComparator = std::le
           typename ValueEqualityChecker = std::equal_to<ValueType>>
 class BPlusTree {
  private:
-
   class LeafNode {
+    uint32_t filled_keys_;
     KeyType keys_[NUM_CHILDREN];
     ValueType values_[NUM_CHILDREN];
     LeafNode *prev_;
     LeafNode *next_;
   };
+
   class InteriorNode {
+    uint32_t filled_guide_posts_;
     KeyType guide_posts_[NUM_CHILDREN - 1];
     bool leaf_children_;
     union {
