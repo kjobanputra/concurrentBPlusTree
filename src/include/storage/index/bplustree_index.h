@@ -138,7 +138,7 @@ class BPlusTreeIndex final : public Index {
     // Perform lookup in BPlusTree
     auto scan_itr = bplustree_->Begin(index_key);
 
-    while (!scan_itr.IsEnd() && scan_itr.Key() == index_key) {
+    while (!scan_itr.IsEnd() && bplustree_->KeyCmpEqual(scan_itr.Key(), index_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
       ++scan_itr;
@@ -187,9 +187,9 @@ class BPlusTreeIndex final : public Index {
     // Perform lookup in BwTree
     auto scan_itr = bplustree_->Begin(index_high_key);
     // Back up one element if we didn't match the high key
-    if (scan_itr.IsEnd() || scan_itr.Key() > index_high_key) --scan_itr;
+    if (scan_itr.IsEnd() || bplustree_->KeyCmpGreater(scan_itr.Key(), index_high_key)) --scan_itr;
 
-    while (!(scan_itr.IsEnd() || scan_itr.Key() < index_low_key)) {
+    while (!scan_itr.IsEnd() && bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
       --scan_itr;
@@ -210,9 +210,10 @@ class BPlusTreeIndex final : public Index {
     // Perform lookup in BwTree
     auto scan_itr = bplustree_->Begin(index_high_key);
     // Back up one element if we didn't match the high key
-    if (scan_itr.IsEnd() || scan_itr.Key() > index_high_key) --scan_itr;
+    if (scan_itr.IsEnd() || bplustree_->KeyCmpGreater(scan_itr.Key(), index_high_key)) --scan_itr;
 
-    while (value_list->size() < limit && !(scan_itr.IsEnd() || scan_itr.Key() < index_low_key)) {
+    while (value_list->size() < limit && !scan_itr.IsEnd() &&
+          bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
       --scan_itr;
