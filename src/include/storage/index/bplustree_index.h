@@ -28,7 +28,7 @@ class BPlusTreeIndex final : public Index {
 
  private:
   explicit BPlusTreeIndex(IndexMetadata metadata)
-      : Index(std::move(metadata)), bplustree_{new BPlusTree<KeyType, TupleSlot>} {}
+      : Index(std::move(metadata)), bplustree_{new BPlusTree<KeyType, TupleSlot>(metadata.GetSchema().Unique())} {}
 
   const std::unique_ptr<BPlusTree<KeyType, TupleSlot>> bplustree_;
 
