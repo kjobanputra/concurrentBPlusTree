@@ -146,9 +146,9 @@ class BPlusTree {
    */
   LeafNodeIterator begin() const { // NOLINT for STL name compability
     InteriorNode *current = root_;
-    do {
+    while(!current->leaf_children_) {
       current = current->interiors_[0];
-    } while(!current->leaf_children_);
+    }
     return {current->leaves_[0], 0};
   }
 
@@ -161,17 +161,17 @@ class BPlusTree {
   LeafNodeIterator begin(KeyType key) const { // NOLINT for STL name compability
     InteriorNode *current = root_;
     LeafNode *leaf = nullptr;
-    do {
+    while (leaf == nullptr) {
       uint32_t child = 0;
       while (child < current->filled_guide_posts_ && KeyCmpGreaterEqual(key, current->guide_posts_[child])) {
         child++;
       }
       if (current->leaf_children_) {
         leaf = current->leaves_[child];
-        break;
+      } else {
+        current = current->interiors_[child];
       }
-      current = current->interiors_[child];
-    } while(true);
+    }
 
     TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
     for (uint32_t index = 0; index < leaf->filled_keys_; index++) {
