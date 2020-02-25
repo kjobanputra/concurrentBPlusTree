@@ -456,14 +456,86 @@ class BPlusTree {
       KeyType guide_post = split(reinterpret_cast<GenericNode<ValueType> *>(leaf),
                                  reinterpret_cast<GenericNode<ValueType> *>(new_leaf), i, k, v);
 
+
+      OverflowNode *read_overflow = leaf->overflow_;
+      int read_id = 0;
+
+      OverflowNode *write_overflow = leaf->overflow_;
+      int write_id = 0;
+
+      OverflowNode *to_overflow = nullptr;
+      int to_id = 0;
+
+      OverflowNode **to_overflow_alloc = &(new_leaf->overflow_);
+
+      while(read_overflow != nullptr && KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
+        read_id++;
+        write_id++;
+        if(read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
+          read_overflow = read_overflow->next_;
+          read_id = 0;
+          write_overflow = write_overflow->next_;
+          write_id = 0;
+        }
+      }
+
+      while(read_overflow != nullptr) {
+        if(KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
+          write_overflow->keys_[write_id] = read_overflow->keys_[read_id];
+          write_overflow->values_[write_id] = read_overflow->values_[read_id];
+          write_id ++;
+          if(write_id == OVERFLOW_SIZE) {
+            write_overflow = write_overflow->next_;
+            write_id = 0;
+          }
+        } else {
+          if(to_overflow == nullptr) {
+            to_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode *), 1));
+            *to_overflow_alloc = to_overflow;
+            to_overflow_alloc = &(to_overflow->next_);
+          }
+
+          to_overflow->keys_[to_id] = read_overflow->keys_[read_id];
+          to_overflow->values_[to_id] = read_overflow->values_[read_id];
+          to_id++;
+          if(to_id == OVERFLOW_SIZE) {
+            to_overflow->filled_keys_ = OVERFLOW_SIZE;
+            to_overflow = nullptr;
+            to_id = 0;
+          }
+        }
+
+        read_id++;
+        if(read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
+          read_overflow = read_overflow->next_;
+          read_id = 0;
+        }
+      }
+
+      if(write_overflow != nullptr) {
+        write_overflow->filled_keys_ = write_id;
+        OverflowNode *temp = write_overflow;
+        write_overflow = write_overflow->next_;
+        temp->next_ = nullptr;
+        while(write_overflow != nullptr) {
+          temp = write_overflow->next_;
+          free(write_overflow);
+          write_overflow = temp;
+        }
+      }
+
+      if(to_overflow != nullptr) {
+        to_overflow->filled_keys_ = to_id;
+      }
+
       TERRIER_ASSERT(leaf->IsLeafNode(allow_duplicates_, false), "Old leaf was not preserved as leaf");
       TERRIER_ASSERT(new_leaf->IsLeafNode(allow_duplicates_, false), "New Leaf not preserved as leaf");
 
       TERRIER_ASSERT(!potential_changes.empty(), "Potential changes should not be empty!!");
       auto *new_inner =
-          reinterpret_cast<LeafNode *>(new_leaf);  // Pointers are the same size and we never dereference this!
+          reinterpret_cast<InteriorNode *>(new_leaf);  // Pointers are the same size and we never dereference this!
       auto inner = --potential_changes.rend();
-      for (; inner != potential_changes.rbegin(); --inner) {
+      for (; inner != potential_changes.rbegin(); ++inner) {
         while (i < inner->filled_guide_posts_ && KeyCmpGreaterEqual(guide_post, inner->guide_posts_[i])) {
           ++i;
         }
