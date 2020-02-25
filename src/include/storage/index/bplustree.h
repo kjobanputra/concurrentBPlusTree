@@ -91,12 +91,12 @@ class BPlusTree {
 
    public:
     inline ValueType &Value() const {
-      TERRIER_ASSERT(!IsEnd(), "Value called on invalid iterator");
+      TERRIER_ASSERT(current_ != nullptr, "Value called on invalid iterator");
       return current_->values_[index_];
     }
 
     inline const KeyType &Key() const {
-      TERRIER_ASSERT(!IsEnd(), "Key called on invalid iterator");
+      TERRIER_ASSERT(current_ != nullptr, "Key called on invalid iterator");
       return current_->keys_[index_];
     }
 
@@ -135,8 +135,8 @@ class BPlusTree {
       return other.current_ == this->current_ && other.index_ == this->index_;
     }
 
-    inline bool IsEnd() const {
-      return current_ == nullptr;
+    inline bool operator!=(const LeafNodeIterator &other) const {
+      return !this->operator==(other);
     }
   };
 
@@ -144,14 +144,13 @@ class BPlusTree {
    * Gets an iterator pointing to the first key/value pair in the tree
    * @return the iterator
    */
-  LeafNodeIterator Begin() const {
+  LeafNodeIterator begin() const { // NOLINT for STL name compability
     InteriorNode *current = root_;
-    for (uint32_t current_depth = 0; current_depth < depth_ - 1; current_depth++) {
+    do {
       current = current->interiors_[0];
-    }
+    } while(!current->leaf_children_);
     return {current->leaves_[0], 0};
   }
-
 
   /**
    * Gets an iterator pointing to the first key/value pair in the tree, whose key is >= the key passed in.
@@ -159,27 +158,35 @@ class BPlusTree {
     * @param key the Lower bound (inclusive) for the
    * @return the iterator
    */
-  LeafNodeIterator Begin(KeyType key) const {
+  LeafNodeIterator begin(KeyType key) const { // NOLINT for STL name compability
     InteriorNode *current = root_;
     LeafNode *leaf = nullptr;
-    for (uint32_t current_depth = 0; current_depth < depth_; current_depth++) {
-      uint32_t child;
-      for (child = 0; child < current->filled_guide_posts_
-        && KeyCmpGreaterEqual(key, current->guide_posts_[child]); child++);
-      if (current_depth == depth_ - 1) {
-        leaf = current->leaves_[child];
-      } else {
-        current = current->interiors_[child];
+    do {
+      uint32_t child = 0;
+      while (child < current->filled_guide_posts_ && KeyCmpGreaterEqual(key, current->guide_posts_[child])) {
+        child++;
       }
-    }
+      if (current->leaf_children_) {
+        leaf = current->leaves_[child];
+        break;
+      }
+      current = current->interiors_[child];
+    } while(true);
+
     TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
     for (uint32_t index = 0; index < leaf->filled_keys_; index++) {
       if (KeyCmpLessEqual(key, leaf->keys_[index])) {
         return {leaf, index};
       }
     }
+
+    // Key exists in the next node over
     LeafNodeIterator ret = {leaf, leaf->filled_keys_ - 1};
     return ++ret;
+  }
+
+  inline const LeafNodeIterator end() const { // NOLINT for STL name compability
+    return {nullptr, 0};
   }
 
   explicit BPlusTree(KeyComparator key_cmp_obj = KeyComparator{},
