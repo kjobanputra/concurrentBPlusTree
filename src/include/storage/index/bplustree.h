@@ -242,7 +242,8 @@ class BPlusTree {
   explicit BPlusTree(bool allow_duplicates, KeyComparator key_cmp_obj = KeyComparator{},
                      KeyEqualityChecker key_eq_obj = KeyEqualityChecker{}, KeyHashFunc key_hash_obj = KeyHashFunc{},
                      ValueEqualityChecker value_eq_obj = ValueEqualityChecker{})
-      : allow_duplicates_(allow_duplicates),
+      : depth_(1),
+        allow_duplicates_(allow_duplicates),
         key_cmp_obj_(key_cmp_obj),
         key_eq_obj_(key_eq_obj),
         key_hash_obj_(key_hash_obj),
