@@ -532,7 +532,7 @@ class BPlusTree {
     }
 
     uint32_t i = 0;
-    while (i < leaf->filled_keys_ && KeyCmpGreaterEqual(k, leaf->keys_[i])) {
+    while (i < leaf->filled_keys_ && KeyCmpGreater(k, leaf->keys_[i])) {
       ++i;
     }
 
@@ -672,9 +672,11 @@ class BPlusTree {
       auto inner = --potential_changes.rend();
       for (; inner != potential_changes.rbegin(); ++inner) {
         // Find out where to insert this node
-        while (i < inner->filled_guide_posts_ && KeyCmpGreaterEqual(guide_post, inner->guide_posts_[i])) {
+        while (i < inner->filled_guide_posts_ && KeyCmpGreater(guide_post, inner->guide_posts_[i])) {
           ++i;
         }
+
+        TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->guide_posts_[i]), "We should not have duplicated guide posts!");
 
         // Perform the insert
         auto *new_inner = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
@@ -684,9 +686,11 @@ class BPlusTree {
       }
 
       // Find out where to insert the final block
-      while (i < inner->filled_guide_posts_ && KeyCmpGreaterEqual(guide_post, inner->guide_posts_[i])) {
+      while (i < inner->filled_guide_posts_ && KeyCmpGreater(guide_post, inner->guide_posts_[i])) {
         ++i;
       }
+
+      TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->guide_posts_[i]), "We should not have duplicated guide posts!");
 
       // Can we insert here?
       if (inner->filled_guide_posts_ < NUM_CHILDREN - 1) {
