@@ -732,4 +732,6 @@ class BPlusTree {
 };
 
 #undef CHECK
+#undef CHECK_LT
+#undef CHECK_LE
 }  // namespace terrier::storage::index
