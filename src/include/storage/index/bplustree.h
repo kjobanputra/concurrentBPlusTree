@@ -155,10 +155,10 @@ class BPlusTree {
   /**
    * Gets an iterator pointing to the first key/value pair in the tree, whose key is >= the key passed in.
    * If the passed in key is larger than all keys in the tree, returns the end iterator.
-    * @param key the Lower bound (inclusive) for the
+   * @param key the Lower bound (inclusive) for the
    * @return the iterator
    */
-  LeafNodeIterator begin(KeyType key) const { // NOLINT for STL name compability
+  LeafNodeIterator begin(const KeyType &key) const { // NOLINT for STL name compability
     InteriorNode *current = root_;
     LeafNode *leaf = nullptr;
     while (leaf == nullptr) {
