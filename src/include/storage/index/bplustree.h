@@ -53,7 +53,6 @@ template <typename KeyType, typename ValueType, typename KeyComparator = std::le
           typename ValueEqualityChecker = std::equal_to<ValueType>>
 class BPlusTree {
  private:
-
   /**
    * This inner class defines what an overflow node looks like. An overflow node
    * is defined to only contain duplicate keys of the LeafNode it is attached to
@@ -89,7 +88,7 @@ class BPlusTree {
      */
     bool IsLeafNode(bool allow_duplicates, bool is_root, BPlusTree *parent) {
       if (is_root) {
-        CHECK_LE(0, filled_keys_); // Root may even be empty
+        CHECK_LE(0, filled_keys_);  // Root may even be empty
       } else {
         CHECK_LE(MIN_CHILDREN, filled_keys_);
       }
@@ -102,7 +101,7 @@ class BPlusTree {
         CHECK(!parent->KeyCmpEqual(keys_[i], keys_[i - 1]));
       }
 
-      //TODO(astanesc): Add checks to make sure overflow node is correct
+      // TODO(astanesc): Add checks to make sure overflow node is correct
       return true;
     }
 
@@ -161,11 +160,11 @@ class BPlusTree {
 
       // Make sure guide posts are in sorted order with no dupes
       for (int i = 1; i < filled_guide_posts_; i++) {
-        CHECK_LT(guide_posts_[i-1], guide_posts_[i]);
+        CHECK_LT(guide_posts_[i - 1], guide_posts_[i]);
       }
 
       // Check to make sure that each child has keys that are in the correct range
-      for(int i = 0; i <= filled_guide_posts_; i++) {
+      for (int i = 0; i <= filled_guide_posts_; i++) {
         if (leaf_children_) {
           auto leaf = leaves_[i];
           CHECK(i == 0 || parent->KeyCmpLessEqual(guide_posts_[i - 1], leaf->keys_[0]));
@@ -498,7 +497,7 @@ class BPlusTree {
   bool Insert(KeyType k, ValueType v) {
     TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
 
-    std::vector<InteriorNode *> potential_changes; // Mark the interior nodes that may be split
+    std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
     potential_changes.reserve(depth_);
 
     InteriorNode *current = root_;
@@ -566,7 +565,6 @@ class BPlusTree {
       KeyType guide_post = split(reinterpret_cast<GenericNode<ValueType> *>(leaf),
                                  reinterpret_cast<GenericNode<ValueType> *>(new_leaf), i, k, v);
 
-
       // These two variables represent where in leaf's overflow nodes we are reading from
       OverflowNode *read_overflow = leaf->overflow_;
       int read_id = 0;
@@ -584,10 +582,10 @@ class BPlusTree {
       OverflowNode **to_overflow_alloc = &(new_leaf->overflow_);
 
       // Skip over any overflow elements that don't need to be moved at all
-      while(read_overflow != nullptr && KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
+      while (read_overflow != nullptr && KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
         read_id++;
         write_id++;
-        if(read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
+        if (read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
           read_overflow = read_overflow->next_;
           read_id = 0;
           write_overflow = write_overflow->next_;
@@ -597,21 +595,21 @@ class BPlusTree {
 
       // For every other overflow element, move it either from leaf to leaf (in another slot) or from leaf to
       // new leaf (in a new slot) depending on where it should live
-      while(read_overflow != nullptr) {
-        if(KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
+      while (read_overflow != nullptr) {
+        if (KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
           // Move from leaf to leaf
           write_overflow->keys_[write_id] = read_overflow->keys_[read_id];
           write_overflow->values_[write_id] = read_overflow->values_[read_id];
 
           // Advance the write index
-          write_id ++;
-          if(write_id == OVERFLOW_SIZE) {
+          write_id++;
+          if (write_id == OVERFLOW_SIZE) {
             write_overflow = write_overflow->next_;
             write_id = 0;
           }
         } else {
           // Lazy allocation still means we have to allocate eventually, and now we know we need allocate
-          if(to_overflow == nullptr) {
+          if (to_overflow == nullptr) {
             to_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode *), 1));
             *to_overflow_alloc = to_overflow;
             to_overflow_alloc = &(to_overflow->next_);
@@ -623,7 +621,7 @@ class BPlusTree {
 
           // Advance the write index
           to_id++;
-          if(to_id == OVERFLOW_SIZE) {
+          if (to_id == OVERFLOW_SIZE) {
             to_overflow->filled_keys_ = OVERFLOW_SIZE;
             to_overflow = nullptr;
             to_id = 0;
@@ -632,7 +630,7 @@ class BPlusTree {
 
         // Advance the read index
         read_id++;
-        if(read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
+        if (read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
           read_overflow = read_overflow->next_;
           read_id = 0;
         }
@@ -640,12 +638,12 @@ class BPlusTree {
 
       // If we wrote any values to the new_leaf, we now might need to
       // free some overflow nodes!
-      if(write_overflow != nullptr) {
+      if (write_overflow != nullptr) {
         write_overflow->filled_keys_ = write_id;
         OverflowNode *temp = write_overflow;
         write_overflow = write_overflow->next_;
         temp->next_ = nullptr;
-        while(write_overflow != nullptr) {
+        while (write_overflow != nullptr) {
           temp = write_overflow->next_;
           free(write_overflow);
           write_overflow = temp;
@@ -653,7 +651,7 @@ class BPlusTree {
       }
 
       // If we did not completely fill up the new leaf overflow nodes, mark where we filled up to
-      if(to_overflow != nullptr) {
+      if (to_overflow != nullptr) {
         to_overflow->filled_keys_ = to_id;
       }
 
@@ -661,8 +659,9 @@ class BPlusTree {
       TERRIER_ASSERT(new_leaf->IsLeafNode(allow_duplicates_, false), "New Leaf not preserved as leaf");
 
       TERRIER_ASSERT(!potential_changes.empty(), "Potential changes should not be empty!!");
-      TERRIER_ASSERT(potential_changes.front().filled_guide_posts_ < NUM_CHILDREN - 1 || potential_changes.front() == root_,
-                     "Potential changes should contain a front which has room for a new child, or the front should be root_");
+      TERRIER_ASSERT(
+          potential_changes.front().filled_guide_posts_ < NUM_CHILDREN - 1 || potential_changes.front() == root_,
+          "Potential changes should contain a front which has room for a new child, or the front should be root_");
 
       // to_insert represents the current node to insert into the parent.
       auto *to_insert =
@@ -694,7 +693,7 @@ class BPlusTree {
 
       // Can we insert here?
       if (inner->filled_guide_posts_ < NUM_CHILDREN - 1) {
-        //Yes! Just insert!
+        // Yes! Just insert!
         for (uint32_t j = inner->filled_keys_; j > i; --j) {
           inner->keys_[j] = inner->keys_[j - 1];
           inner->interiors_[j] = inner->interiors_[j - 1];
