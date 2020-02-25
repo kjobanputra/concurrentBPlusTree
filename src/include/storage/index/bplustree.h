@@ -27,7 +27,7 @@ namespace terrier::storage::index {
 #define CHECK_LE(x, y) CHECK((x) <= (y))
 
 /**
- * Convenience version of CHECK that checks whether x >= y
+ * Convenience version of CHECK that checks whether x < y
  */
 #define CHECK_LT(x, y) CHECK((x) < (y))
 
