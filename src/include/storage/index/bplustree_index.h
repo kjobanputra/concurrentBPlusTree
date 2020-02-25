@@ -129,8 +129,6 @@ class BPlusTreeIndex final : public Index {
                std::vector<TupleSlot> *value_list) final {
     TERRIER_ASSERT(value_list->empty(), "Result set should begin empty.");
 
-    std::vector<TupleSlot> results;
-
     // Build search key
     KeyType index_key;
     index_key.SetFromProjectedRow(key, metadata_, metadata_.GetSchema().GetColumns().size());
