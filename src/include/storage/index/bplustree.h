@@ -65,16 +65,28 @@ class BPlusTree {
   };
 
   /**
+   * A generic node represents the common portion of both a LeafNode and an InteriorNode.
+   * This allows us to write code that is agnostic to the specifics of a leaf node vs an interior node,
+   * but which only operates on keys and a generic value.
+   */
+  template <typename Value>
+  class GenericNode {
+   protected:
+    uint32_t filled_keys_;
+    KeyType keys_[NUM_CHILDREN];
+    Value values_[NUM_CHILDREN];
+
+    friend class BPlusTree;
+  };
+
+  /**
    * This inner class defines what a LeafNode is. The keys are stored in
    * sorted order with no duplicates within the keys_ array. If the
    * tree supports duplicate keys, then any duplicates will be stored
    * in the overflow node.
    */
-  class LeafNode {
+  class LeafNode: public GenericNode<ValueType> {
    private:
-    uint32_t filled_keys_;
-    KeyType keys_[NUM_CHILDREN];
-    ValueType values_[NUM_CHILDREN];
     LeafNode *prev_;
     LeafNode *next_;
     OverflowNode *overflow_;
@@ -88,17 +100,17 @@ class BPlusTree {
      */
     bool IsLeafNode(bool allow_duplicates, bool is_root, BPlusTree *parent) {
       if (is_root) {
-        CHECK_LE(0, filled_keys_);  // Root may even be empty
+        CHECK_LE(0, this->filled_keys_);  // Root may even be empty
       } else {
-        CHECK_LE(MIN_CHILDREN, filled_keys_);
+        CHECK_LE(MIN_CHILDREN, this->filled_keys_);
       }
-      CHECK_LE(filled_keys_, NUM_CHILDREN);
+      CHECK_LE(this->filled_keys_, NUM_CHILDREN);
 
       CHECK(allow_duplicates || overflow_ == nullptr);
 
-      for (int i = 1; i < filled_keys_; i++) {
-        CHECK(parent->KeyCmpLess(keys_[i], keys_[i - 1]));
-        CHECK(!parent->KeyCmpEqual(keys_[i], keys_[i - 1]));
+      for (int i = 1; i < this->filled_keys_; i++) {
+        CHECK(parent->KeyCmpLess(this->keys_[i], this->keys_[i - 1]));
+        CHECK(!parent->KeyCmpEqual(this->keys_[i], this->keys_[i - 1]));
       }
 
       // TODO(astanesc): Add checks to make sure overflow node is correct
@@ -106,6 +118,13 @@ class BPlusTree {
     }
 
     friend class BPlusTree;
+  };
+
+  class InteriorNode;
+
+  union Child {
+    InteriorNode *as_interior;
+    LeafNode *as_leaf;
   };
 
   /**
@@ -117,15 +136,27 @@ class BPlusTree {
    * NB: We allocate one more guide post than necessary in order to allow InteriorNode
    * and LeafNode to have the same layout in memory for the first 3 fields (e.g. GenericNode)
    */
-  class InteriorNode {
+  class InteriorNode: public GenericNode<Child> {
    private:
-    uint32_t filled_guide_posts_;
-    KeyType guide_posts_[NUM_CHILDREN];
-    union {
-      InteriorNode *interiors_[NUM_CHILDREN];
-      LeafNode *leaves_[NUM_CHILDREN];
-    };
     bool leaf_children_;
+
+    /**
+     * Gets a reference to the i^th child assuming that the children of this node
+     * are leaves
+     */
+    LeafNode* &Leaf(uint32_t i) {
+      TERRIER_ASSERT(leaf_children_, "Leaf must be called only on an interior node with leaf children");
+      return this->values_[i].as_leaf;
+    }
+
+    /**
+     * Gets a reference to the i^th child assuming that the children of this node
+     * are interior nodes
+     */
+    InteriorNode* &Interior(uint32_t i) {
+      TERRIER_ASSERT(!leaf_children_, "Interior must be called only on an interior node with no leaf children");
+      return this->values_[i].as_interior;
+    }
 
     /**
      * Returns whether or not this node is an interior node
@@ -138,69 +169,69 @@ class BPlusTree {
                         BPlusTree *parent) {
       // Check bounds on number of filled guide posts
       if (is_root) {
-        CHECK_LT(0, filled_guide_posts_);
+        CHECK_LT(0, this->filled_keys_);
       } else {
-        CHECK_LT(MIN_CHILDREN, filled_guide_posts_);
+        CHECK_LT(MIN_CHILDREN, this->filled_keys_);
       }
-      CHECK_LE(filled_guide_posts_, NUM_CHILDREN - 1);
+      CHECK_LE(this->filled_keys_, NUM_CHILDREN - 1);
 
       // Check to make sure that every child is a valid node
-      for (int i = 0; i <= filled_guide_posts_; i++) {
+      for (int i = 0; i <= this->filled_keys_; i++) {
         if (leaf_children_) {
-          CHECK(leaves_[i] != nullptr);
-          CHECK(leaves_[i]->IsLeafNode(allow_duplicates));
+          CHECK(Leaf(i) != nullptr);
+          CHECK(Leaf(i)->IsLeafNode(allow_duplicates));
 
-          CHECK(i == 0 || (leaves_[i]->prev_ == leaves_[i - 1] && leaves_[i - 1]->next_ == leaves_[i]));
+          CHECK(i == 0 || (Leaf(i)->prev_ == Leaf(i-1).as_leaf && Leaf(i - 1)->next_ == Leaf(i)));
         } else {
-          CHECK(interiors_[i] != nullptr);
-          CHECK(interiors_[i]->IsInteriorNode(true, i == 0 ? prev : interiors_[i - 1],
-                                              i == filled_guide_posts_ ? next : interiors_[i + 1]));
+          CHECK(Interior(i) != nullptr);
+          CHECK(Interior(i)->IsInteriorNode(true, i == 0 ? prev : Interior(i - 1),
+                                              i == this->filled_keys_ ? next : Interior(i + 1)));
         }
       }
 
       // Make sure guide posts are in sorted order with no dupes
-      for (int i = 1; i < filled_guide_posts_; i++) {
-        CHECK_LT(guide_posts_[i - 1], guide_posts_[i]);
+      for (int i = 1; i < this->filled_keys_; i++) {
+        CHECK_LT(this->keys_[i - 1], this->keys_[i]);
       }
 
       // Check to make sure that each child has keys that are in the correct range
-      for (int i = 0; i <= filled_guide_posts_; i++) {
+      for (int i = 0; i <= this->filled_keys_; i++) {
         if (leaf_children_) {
-          auto leaf = leaves_[i];
-          CHECK(i == 0 || parent->KeyCmpLessEqual(guide_posts_[i - 1], leaf->keys_[0]));
-          CHECK(i == filled_guide_posts_ ||
-                parent->KeyCmpLessEqual(leaf->keys_[leaf->filled_keys_ - 1], guide_posts_[i]));
+          auto leaf = Leaf(i);
+          CHECK(i == 0 || parent->KeyCmpLessEqual(this->keys_[i - 1], leaf->keys_[0]));
+          CHECK(i == this->filled_keys_ ||
+                parent->KeyCmpLessEqual(leaf->keys_[leaf->filled_keys_ - 1], this->keys_[i]));
         } else {
-          auto interior = interiors_[i];
-          CHECK(i == 0 || (parent->KeyCmpLessEqual(guide_posts_[i - 1], interior->guide_posts_[0])));
-          CHECK(i == filled_guide_posts_ ||
-                parent->KeyCmpLessEqual(interior->guide_posts_[interior->filled_guide_posts_ - 1], guide_posts_[i]));
+          auto interior = Interior(i);
+          CHECK(i == 0 || (parent->KeyCmpLessEqual(this->keys_[i - 1], interior->keys_[0])));
+          CHECK(i == this->filled_keys_ ||
+                parent->KeyCmpLessEqual(interior->keys_[interior->filled_keys_ - 1], this->keys_[i]));
         }
       }
 
-      // Check to make sure that children on the edges (e.g. at indices 0 and filled_guide_posts_)
+      // Check to make sure that children on the edges (e.g. at indices 0 and filled_keys_)
       // have keys in the correct ranges
       if (leaf_children_) {
         CHECK(prev == nullptr || prev->leaf_children_);
-        CHECK((prev == nullptr && leaves_[0]->prev_ == nullptr) ||
-              (prev != nullptr && leaves_[0]->prev_ == prev->leaves_[prev->filled_guide_posts_]));
+        CHECK((prev == nullptr && Leaf(0)->prev_ == nullptr) ||
+              (prev != nullptr && Leaf(0)->prev_ == prev->Leaf(prev->filled_keys_)));
         CHECK(prev == nullptr ||
-              parent->KeyCmpLessEqual(prev->guide_posts_[prev->filled_guide_posts_], leaves_[0]->keys_[0]));
+              parent->KeyCmpLessEqual(prev->keys_[prev->filled_keys_], Leaf(0)->keys_[0]));
 
-        auto last_leaf = leaves_[filled_guide_posts_];
+        auto last_leaf = Leaf(this->filled_keys_);
         CHECK(next == nullptr || next->leaf_children_);
         CHECK((next == nullptr && last_leaf->next_ == nullptr) ||
-              (next != nullptr && last_leaf->next_ != next->leaves_[0]));
+              (next != nullptr && last_leaf->next_ != next->Leaf(0)));
 
         CHECK(next == nullptr ||
-              parent->KeyCmpLessEqual(next->guide_posts_[0], last_leaf->keys_[last_leaf->filled_keys_ - 1]));
+              parent->KeyCmpLessEqual(next->keys_[0], last_leaf->keys_[last_leaf->filled_keys_ - 1]));
       } else {
         CHECK(prev == nullptr ||
-              parent->KeyCmpLessEqual(prev->guide_posts_[prev->filled_guide_posts_], interiors_[0]->guide_posts_[0]));
-        auto last_interior = interiors_[filled_guide_posts_];
+              parent->KeyCmpLessEqual(prev->keys_[prev->filled_keys_], Interior(0)->keys_[0]));
+        auto last_interior = Interior(this->filled_keys_);
         CHECK(next == nullptr ||
-              parent->KeyCmpLessEqual(next->guide_posts_[0],
-                                      last_interior->guide_posts_[last_interior->filled_guide_posts_]));
+              parent->KeyCmpLessEqual(next->keys_[0],
+                                      last_interior->keys_[last_interior->filled_keys_]));
       }
 
       return true;
@@ -222,11 +253,11 @@ class BPlusTree {
    * Checks if this B+ Tree is truly a B+ Tree
    */
   bool IsBplusTree() {
-    if (root_->filled_guide_posts_ == 0) {
+    if (root_->filled_keys_ == 0) {
       // Root is not a valid interior node until we do a split!
       // However, this is only allowed to happen if the depth is truly 1
-      return depth_ == 1 && root_->leaf_children_ && root_->leaves_[0]->IsLeafNode(allow_duplicates_, true, this) &&
-             root_->leaves_[0]->next_ == nullptr && root_->leaves[0]->prev_ == nullptr;
+      return depth_ == 1 && root_->leaf_children_ && root_->Leaf(0)->IsLeafNode(allow_duplicates_, true, this) &&
+             root_->Leaf(0)->next_ == nullptr && root_->leaves[0]->prev_ == nullptr;
     }
 
     if (!root_->IsInteriorNode(allow_duplicates_, nullptr, nullptr, true, this)) {
@@ -242,8 +273,8 @@ class BPlusTree {
       while (!level.empty()) {
         auto elem = level.pop();
         CHECK(!elem->leaf_children_);
-        for (int j = 0; j <= elem->filled_guide_posts_; j++) {
-          next_level.push(elem->interiors_[j]);
+        for (int j = 0; j <= elem->filled_keys_; j++) {
+          next_level.push(elem->Interior(j));
         }
       }
       level = std::move(next_level);
@@ -256,28 +287,6 @@ class BPlusTree {
     return true;
   }
 
-  /**
-   * A generic node represents the beginning portion of both a LeafNode and an InteriorNode.
-   * This allows us to write code that is agnostic to the specifics of a leaf node vs an interior node,
-   * but wich only operates on keys and a generic value.
-   */
-  template <typename Value>
-  struct GenericNode {
-    uint32_t keycount_;
-    KeyType keys_[NUM_CHILDREN];
-    Value values_[NUM_CHILDREN];
-  };
-
-  /**
-   * Make sure that doing a reinterpret-cast will actually lead to correct behavior!
-   */
-  static_assert(offsetof(LeafNode, filled_keys_) == offsetof(GenericNode<ValueType>, keycount_));
-  static_assert(offsetof(LeafNode, keys_) == offsetof(GenericNode<ValueType>, keys_));
-  static_assert(offsetof(LeafNode, values_) == offsetof(GenericNode<ValueType>, values_));
-
-  static_assert(offsetof(InteriorNode, filled_guide_posts_) == offsetof(GenericNode<InteriorNode *>, keycount_));
-  static_assert(offsetof(InteriorNode, guide_posts_) == offsetof(GenericNode<InteriorNode *>, keys_));
-  static_assert(offsetof(InteriorNode, interiors_) == offsetof(GenericNode<InteriorNode *>, values_));
 
   /**
    * Splits a node to allow for the insertion of a key/value pair. This method will split the node {@code from}
@@ -350,7 +359,7 @@ class BPlusTree {
         value_eq_obj_(value_eq_obj) {
     root_ = reinterpret_cast<InteriorNode *>(calloc(sizeof(class InteriorNode), 1));
     root_->leaf_children_ = true;
-    root_->leaves_[0] = reinterpret_cast<LeafNode *>(calloc(sizeof(class LeafNode), 1));
+    root_->Leaf(0) = reinterpret_cast<LeafNode *>(calloc(sizeof(class LeafNode), 1));
   }
 
   /*
@@ -452,9 +461,9 @@ class BPlusTree {
   LeafNodeIterator begin() const {  // NOLINT for STL name compability
     InteriorNode *current = root_;
     while (!current->leaf_children_) {
-      current = current->interiors_[0];
+      current = current->Interior(0);
     }
-    return {current->leaves_[0], 0};
+    return {current->Leaf(0), 0};
   }
 
   /**
@@ -468,13 +477,13 @@ class BPlusTree {
     LeafNode *leaf = nullptr;
     while (leaf == nullptr) {
       uint32_t child = 0;
-      while (child < current->filled_guide_posts_ && KeyCmpGreaterEqual(key, current->guide_posts_[child])) {
+      while (child < current->filled_keys_ && KeyCmpGreaterEqual(key, current->keys_[child])) {
         child++;
       }
       if (current->leaf_children_) {
-        leaf = current->leaves_[child];
+        leaf = current->Leaf(child);
       } else {
-        current = current->interiors_[child];
+        current = current->Interior(child);
       }
     }
 
@@ -505,23 +514,23 @@ class BPlusTree {
     while (leaf == nullptr) {
       // If we know we do not need to split (e.g. there are still open guide posts,
       // then we don't need to keep track of anything above us
-      if (current->filled_guide_posts_ < NUM_CHILDREN - 1) {
+      if (current->filled_keys_ < NUM_CHILDREN - 1) {
         potential_changes.erase(potential_changes.begin(), potential_changes.end());
       }
       // However, the level below us may still split, so we may still change. Keep track of that
       potential_changes.push_back(current);
 
       uint32_t i = 0;
-      while (i < current->filled_guide_posts_ && KeyCmpGreaterEqual(k, current->guide_posts_[i])) {
+      while (i < current->filled_keys_ && KeyCmpGreaterEqual(k, current->keys_[i])) {
         ++i;
       }
 
       // If we've reached the leaf level, break out!
       if (current->leaf_children_) {
-        leaf = current->leaves_[i];
+        leaf = current->Leaf(i);
         TERRIER_ASSERT(leaf != nullptr, "Leaves should not be null!!");
       } else {
-        current = current->interiors_[i];
+        current = current->Interior(i);
       }
     }
 
@@ -543,6 +552,9 @@ class BPlusTree {
     // If duplicates _are_ allowed, then insert into the overflow node, allocating a new one as necessary
     if (KeyCmpEqual(k, leaf->keys_[i])) {
       OverflowNode *current_overflow = leaf->overflow_;
+
+      // In case at any point current_overflow is null, keep track of the location where the previous block
+      // will need to point to its new "next overflow block"
       OverflowNode **prev_overflow = &(leaf->overflow_);
       while (current_overflow != nullptr && current_overflow->filled_keys_ >= OVERFLOW_SIZE) {
         prev_overflow = &(current_overflow->next_);
@@ -660,7 +672,7 @@ class BPlusTree {
 
       TERRIER_ASSERT(!potential_changes.empty(), "Potential changes should not be empty!!");
       TERRIER_ASSERT(
-          potential_changes.front().filled_guide_posts_ < NUM_CHILDREN - 1 || potential_changes.front() == root_,
+          potential_changes.front().filled_keys_ < NUM_CHILDREN - 1 || potential_changes.front() == root_,
           "Potential changes should contain a front which has room for a new child, or the front should be root_");
 
       // to_insert represents the current node to insert into the parent.
@@ -671,11 +683,11 @@ class BPlusTree {
       auto inner = --potential_changes.rend();
       for (; inner != potential_changes.rbegin(); ++inner) {
         // Find out where to insert this node
-        while (i < inner->filled_guide_posts_ && KeyCmpGreater(guide_post, inner->guide_posts_[i])) {
+        while (i < inner->filled_keys_ && KeyCmpGreater(guide_post, inner->keys_[i])) {
           ++i;
         }
 
-        TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->guide_posts_[i]), "We should not have duplicated guide posts!");
+        TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->keys_[i]), "We should not have duplicated guide posts!");
 
         // Perform the insert
         auto *new_inner = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
@@ -685,22 +697,22 @@ class BPlusTree {
       }
 
       // Find out where to insert the final block
-      while (i < inner->filled_guide_posts_ && KeyCmpGreater(guide_post, inner->guide_posts_[i])) {
+      while (i < inner->filled_keys_ && KeyCmpGreater(guide_post, inner->keys_[i])) {
         ++i;
       }
 
-      TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->guide_posts_[i]), "We should not have duplicated guide posts!");
+      TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->keys_[i]), "We should not have duplicated guide posts!");
 
       // Can we insert here?
-      if (inner->filled_guide_posts_ < NUM_CHILDREN - 1) {
+      if (inner->filled_keys_ < NUM_CHILDREN - 1) {
         // Yes! Just insert!
         for (uint32_t j = inner->filled_keys_; j > i; --j) {
           inner->keys_[j] = inner->keys_[j - 1];
-          inner->interiors_[j] = inner->interiors_[j - 1];
+          inner->Interior(j) = inner->Interior(j - 1);
         }
 
         inner->keys_[i] = guide_post;
-        inner->interiors_[i] = to_insert;
+        inner->Interior(i) = to_insert;
       } else {
         // No - we've reached the root and must split
         TERRIER_ASSERT(inner == root_, "Top level inner potential change should not be full unless it is the root");
@@ -711,10 +723,10 @@ class BPlusTree {
                            reinterpret_cast<GenericNode<InteriorNode *>>(new_inner), i, guide_post, to_insert);
 
         auto *new_root = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
-        new_root->guide_posts_[0] = guide_post;
-        new_root->filled_guide_posts_ = 1;
-        new_root->interiors_[0] = inner;
-        new_root->interiors_[1] = new_inner;
+        new_root->keys_[0] = guide_post;
+        new_root->filled_keys_ = 1;
+        new_root->Interior(0) = inner;
+        new_root->Interior(1) = new_inner;
         root_ = new_root;
       }
     } else {
