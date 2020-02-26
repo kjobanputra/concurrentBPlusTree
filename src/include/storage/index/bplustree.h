@@ -85,7 +85,7 @@ class BPlusTree {
    * tree supports duplicate keys, then any duplicates will be stored
    * in the overflow node.
    */
-  class LeafNode: public GenericNode<ValueType> {
+  class LeafNode : public GenericNode<ValueType> {
    private:
     LeafNode *prev_;
     LeafNode *next_;
@@ -123,8 +123,8 @@ class BPlusTree {
   class InteriorNode;
 
   union Child {
-    InteriorNode *as_interior;
-    LeafNode *as_leaf;
+    InteriorNode *as_interior_;
+    LeafNode *as_leaf_;
   };
 
   /**
@@ -136,7 +136,7 @@ class BPlusTree {
    * NB: We allocate one more guide post than necessary in order to allow InteriorNode
    * and LeafNode to have the same layout in memory for the first 3 fields (e.g. GenericNode)
    */
-  class InteriorNode: public GenericNode<Child> {
+  class InteriorNode : public GenericNode<Child> {
    private:
     bool leaf_children_;
 
@@ -144,18 +144,18 @@ class BPlusTree {
      * Gets a reference to the i^th child assuming that the children of this node
      * are leaves
      */
-    LeafNode* &Leaf(uint32_t i) {
+    LeafNode *&Leaf(uint32_t i) {
       TERRIER_ASSERT(leaf_children_, "Leaf must be called only on an interior node with leaf children");
-      return this->values_[i].as_leaf;
+      return this->values_[i].as_leaf_;
     }
 
     /**
      * Gets a reference to the i^th child assuming that the children of this node
      * are interior nodes
      */
-    InteriorNode* &Interior(uint32_t i) {
+    InteriorNode *&Interior(uint32_t i) {
       TERRIER_ASSERT(!leaf_children_, "Interior must be called only on an interior node with no leaf children");
-      return this->values_[i].as_interior;
+      return this->values_[i].as_interior_;
     }
 
     /**
@@ -181,11 +181,11 @@ class BPlusTree {
           CHECK(Leaf(i) != nullptr);
           CHECK(Leaf(i)->IsLeafNode(allow_duplicates));
 
-          CHECK(i == 0 || (Leaf(i)->prev_ == Leaf(i-1).as_leaf && Leaf(i - 1)->next_ == Leaf(i)));
+          CHECK(i == 0 || (Leaf(i)->prev_ == Leaf(i - 1).as_leaf && Leaf(i - 1)->next_ == Leaf(i)));
         } else {
           CHECK(Interior(i) != nullptr);
           CHECK(Interior(i)->IsInteriorNode(true, i == 0 ? prev : Interior(i - 1),
-                                              i == this->filled_keys_ ? next : Interior(i + 1)));
+                                            i == this->filled_keys_ ? next : Interior(i + 1)));
         }
       }
 
@@ -215,8 +215,7 @@ class BPlusTree {
         CHECK(prev == nullptr || prev->leaf_children_);
         CHECK((prev == nullptr && Leaf(0)->prev_ == nullptr) ||
               (prev != nullptr && Leaf(0)->prev_ == prev->Leaf(prev->filled_keys_)));
-        CHECK(prev == nullptr ||
-              parent->KeyCmpLessEqual(prev->keys_[prev->filled_keys_], Leaf(0)->keys_[0]));
+        CHECK(prev == nullptr || parent->KeyCmpLessEqual(prev->keys_[prev->filled_keys_], Leaf(0)->keys_[0]));
 
         auto last_leaf = Leaf(this->filled_keys_);
         CHECK(next == nullptr || next->leaf_children_);
@@ -226,12 +225,10 @@ class BPlusTree {
         CHECK(next == nullptr ||
               parent->KeyCmpLessEqual(next->keys_[0], last_leaf->keys_[last_leaf->filled_keys_ - 1]));
       } else {
-        CHECK(prev == nullptr ||
-              parent->KeyCmpLessEqual(prev->keys_[prev->filled_keys_], Interior(0)->keys_[0]));
+        CHECK(prev == nullptr || parent->KeyCmpLessEqual(prev->keys_[prev->filled_keys_], Interior(0)->keys_[0]));
         auto last_interior = Interior(this->filled_keys_);
         CHECK(next == nullptr ||
-              parent->KeyCmpLessEqual(next->keys_[0],
-                                      last_interior->keys_[last_interior->filled_keys_]));
+              parent->KeyCmpLessEqual(next->keys_[0], last_interior->keys_[last_interior->filled_keys_]));
       }
 
       return true;
@@ -286,7 +283,6 @@ class BPlusTree {
     }
     return true;
   }
-
 
   /**
    * Splits a node to allow for the insertion of a key/value pair. This method will split the node {@code from}
