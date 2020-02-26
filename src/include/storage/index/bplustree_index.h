@@ -28,7 +28,7 @@ class BPlusTreeIndex final : public Index {
 
  private:
   explicit BPlusTreeIndex(IndexMetadata metadata)
-      : Index(std::move(metadata)), bplustree_{new BPlusTree<KeyType, TupleSlot>} {}
+      : Index(std::move(metadata)), bplustree_{new BPlusTree<KeyType, TupleSlot>(metadata.GetSchema().Unique())} {}
 
   const std::unique_ptr<BPlusTree<KeyType, TupleSlot>> bplustree_;
 
@@ -215,7 +215,7 @@ class BPlusTreeIndex final : public Index {
     if (scan_itr == end_itr || bplustree_->KeyCmpGreater(scan_itr.Key(), index_high_key)) --scan_itr;
 
     while (value_list->size() < limit && scan_itr != end_itr &&
-          bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
+           bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
       --scan_itr;
