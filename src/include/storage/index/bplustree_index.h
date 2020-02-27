@@ -54,17 +54,16 @@ class BPlusTreeIndex final : public Index {
     // key/value pair
     const bool UNUSED_ATTRIBUTE result = true;
 
-    // If your data structure can fail in such a way that a retry is appropriate, handle that here until result succeeds
+    TERRIER_ASSERT(
+        result,
+        "non-unique index shouldn't fail to insert. If it did, something went wrong deep inside the BPlusTree itself.");
+    // Register an abort action with the txn context in case of rollback
+    txn->RegisterAbortAction([=]() {
+      // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
+      const bool UNUSED_ATTRIBUTE result = true;
 
-    if (result) {
-      // Register an abort action with the txn context in case of rollback
-      txn->RegisterAbortAction([=]() {
-        // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
-        const bool UNUSED_ATTRIBUTE result = true;
-
-        TERRIER_ASSERT(result, "Delete on the index failed.");
-      });
-    }
+      TERRIER_ASSERT(result, "Delete on the index failed.");
+    });
     return result;
   }
 
@@ -87,8 +86,7 @@ class BPlusTreeIndex final : public Index {
     // key/value pair
     const bool UNUSED_ATTRIBUTE result = true;
 
-    // If your data structure can fail in such a way that a retry is appropriate, handle that here until result succeeds
-    // as long as !predicate_satisfied
+    TERRIER_ASSERT(predicate_satisfied != result, "If predicate is not satisfied then insertion should succeed.");
 
     if (result) {
       // Register an abort action with the txn context in case of rollback
@@ -122,8 +120,7 @@ class BPlusTreeIndex final : public Index {
         // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
         const bool UNUSED_ATTRIBUTE result = true;
 
-        // If your data structure can fail in such a way that a retry is appropriate, handle that here until result
-        // succeeds
+        TERRIER_ASSERT(result, "Deferred delete on the index failed.");
       });
     });
   }
