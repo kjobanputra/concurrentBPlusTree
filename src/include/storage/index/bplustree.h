@@ -398,6 +398,9 @@ class BPlusTree {
   // Forward declaration for friend classing
   class KeyIterator;
 
+  /**
+   * An iterator used for iterating through the multiple values which could exist for a single key.
+   */
   class DuplicateIterator {
    private:
     friend class KeyIterator;
@@ -410,11 +413,18 @@ class BPlusTree {
     : tree_(tree), current_(current), index_(index) {}
 
    public:
+    /**
+     * Grabs the value currently referenced by this iterator.
+     */
     ValueType &operator*() const {
       TERRIER_ASSERT(current_ != nullptr, "Derefernce ofinvalid iterator");
       return current_->values_[index_];
     }
 
+    /**
+     * Moves to the next value, or the end if there are no more values.
+     * @returns a reference to this iterator.
+     */
     DuplicateIterator &operator++() {
       KeyType &key = current_->keys_[index_];
       do {
@@ -427,19 +437,35 @@ class BPlusTree {
       return *this;
     }
 
+    /**
+     * Moves to the next value, or the end if there are no more values.
+     * @returns a copy of the iterator before the operation.
+     */
     DuplicateIterator operator++(int) {
       KeyIterator copy = *this;
       this->operator++();
       return copy;
     }
 
+    /**
+     * Checks if two iterators are referring to the same duplicate value.
+     */
     bool operator==(const DuplicateIterator &other) const {
       return current_ == other.current_ && index_ == other.index_;
     }
 
+    /**
+     * Checks if two iterators are not referring to the same duplicate value.
+     */
     bool operator!=(const DuplicateIterator &other) const { return !this->operator==(other); }
   };
 
+  /**
+   * An iterator over specific keys in the BPlusTree. Use ++ and -- to move to greater / less keys.
+   *
+   * Will only visit unique keys in the tree. Duplicate values can be gotten by using a duplicate iterator,
+   * gotten by this one's begin() method.
+   */
   class KeyIterator {
    private:
     friend class BPlusTree;
@@ -452,16 +478,36 @@ class BPlusTree {
       : tree_(tree), current_(current), index_(index) {}
 
    public:
+    /**
+     * Gets the primary (first-inserted) value stored for this key.
+     */
     ValueType &Value() const {
       TERRIER_ASSERT(current_ != nullptr, "Value called on invalid iterator");
       return current_->values_[index_];
     }
 
+    /**
+     * Gets the primary (first-inserted) value stored for this key.
+     *
+     * Syntactic-sugar for STL compatability
+     */
+    ValueType &operator*() const {
+      TERRIER_ASSERT(current_ != nullptr, "Value called on invalid iterator");
+      return current_->values_[index_];
+    }
+
+    /**
+     * Gets the key for this iterator.
+     */
     const KeyType &Key() const {
       TERRIER_ASSERT(current_ != nullptr, "Key called on invalid iterator");
       return current_->keys_[index_];
     }
 
+    /**
+     * Moves to the immediately greater key, or the end of the tree if there are no more keys.
+     * @returns a reference to this iterator.
+     */
     KeyIterator &operator++() {
       index_++;
       if (index_ >= current_->filled_keys_) {
@@ -471,12 +517,20 @@ class BPlusTree {
       return *this;
     }
 
+    /**
+     * Moves to the immediately greater key, or the end of the tree if there are no more keys.
+     * @returns a copy of the iterator before the operation.
+     */
     KeyIterator operator++(int) {
       KeyIterator copy = *this;
       this->operator++();
       return copy;
     }
 
+    /**
+     * Moves to the immediately less-than key, or the end of the tree if there are no more keys.
+     * @returns a reference to this iterator.
+     */
     KeyIterator &operator--() {
       if (index_ == 0) {
         current_ = current_->prev_;
@@ -487,18 +541,31 @@ class BPlusTree {
       return *this;
     }
 
+    /**
+     * Moves to the immediately less-than key, or the end of the tree if there are no more keys.
+     * @returns a copy of the iterator before the operation.
+     */
     KeyIterator operator--(int) {
       KeyIterator copy = *this;
       this->operator--();
       return copy;
     }
 
+    /**
+     * Checks if two iterators are referring to the same key.
+     */
     bool operator==(const KeyIterator &other) const {
       return other.current_ == this->current_ && other.index_ == this->index_;
     }
 
+    /**
+     * Checks if two iterators are not referring to the same key.
+     */
     bool operator!=(const KeyIterator &other) const { return !this->operator==(other); }
 
+    /**
+     * Gets the starting iterator for iterating over other stored values for this key.
+     */
     DuplicateIterator begin() const {  // NOLINT for STL name compability
       KeyType &key = current_->keys_[index_];
       OverflowNode *current = current_->overflow_;
@@ -513,6 +580,9 @@ class BPlusTree {
       return {tree_, current, index};
     }
 
+    /**
+     * Gets the ending iterator for iterating over other stored values for this key.
+     */
     const DuplicateIterator end() const {  // NOLINT for STL name compability
       return {tree_, nullptr, 0};
     }
@@ -523,6 +593,7 @@ class BPlusTree {
    * @return the iterator
    */
   KeyIterator begin() const {  // NOLINT for STL name compability
+    TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
     InteriorNode *current = root_;
     while (!current->leaf_children_) {
       current = current->Interior(0);
@@ -537,8 +608,11 @@ class BPlusTree {
    * @return the iterator
    */
   KeyIterator begin(const KeyType &key) const {  // NOLINT for STL name compability
+    TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
     InteriorNode *current = root_;
     LeafNode *leaf = nullptr;
+
+    // Do a search for the right-most leaf with keys < this key
     while (leaf == nullptr) {
       uint32_t child = 0;
       while (child < current->filled_keys_ && KeyCmpGreaterEqual(key, current->keys_[child])) {
@@ -546,12 +620,13 @@ class BPlusTree {
       }
       if (current->leaf_children_) {
         leaf = current->Leaf(child);
+        TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
       } else {
         current = current->Interior(child);
       }
     }
 
-    TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
+    // Find first key in this node >= this one
     for (uint32_t index = 0; index < leaf->filled_keys_; index++) {
       if (KeyCmpLessEqual(key, leaf->keys_[index])) {
         return {this, leaf, index};
