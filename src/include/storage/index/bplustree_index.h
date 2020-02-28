@@ -137,7 +137,7 @@ class BPlusTreeIndex final : public Index {
     auto scan_itr = bplustree_->begin(index_key);
     auto end_itr = bplustree_->end();
 
-    if (scan_itr != end_itr) {
+    if (scan_itr != end_itr && bplustree_->KeyCmpEqual(scan_itr.Key(), index_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
 
