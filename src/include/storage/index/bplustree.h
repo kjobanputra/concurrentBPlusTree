@@ -168,8 +168,8 @@ class BPlusTree {
      * @param prev the left sibling of this interior node, or {@code nullptr} if no left sibling exists
      * @param next the right sibling of this interior node, or {@code nullptr} if no right sibling exists
      */
-    bool IsInteriorNode(bool allow_duplicates, InteriorNode *prev, InteriorNode *next,
-                        bool is_root, const BPlusTree *parent) {
+    bool IsInteriorNode(bool allow_duplicates, InteriorNode *prev, InteriorNode *next, bool is_root,
+                        const BPlusTree *parent) {
       // Check bounds on number of filled guide posts
       if (is_root) {
         CHECK_LT(0, this->filled_keys_);
@@ -188,7 +188,7 @@ class BPlusTree {
         } else {
           CHECK(Interior(i) != nullptr);
           CHECK(Interior(i)->IsInteriorNode(true, i == 0 ? prev : Interior(i - 1),
-              i == this->filled_keys_ ? next : Interior(i + 1), false, parent));
+                                            i == this->filled_keys_ ? next : Interior(i + 1), false, parent));
         }
       }
 
@@ -412,7 +412,7 @@ class BPlusTree {
     uint32_t index_;
 
     DuplicateIterator(const BPlusTree *tree, OverflowNode *current, uint32_t index)
-    : tree_(tree), current_(current), index_(index) {}
+        : tree_(tree), current_(current), index_(index) {}
 
    public:
     /**
@@ -477,7 +477,7 @@ class BPlusTree {
     uint32_t index_;
 
     KeyIterator(const BPlusTree *tree, LeafNode *current, uint32_t index)
-      : tree_(tree), current_(current), index_(index) {}
+        : tree_(tree), current_(current), index_(index) {}
 
    public:
     /**
