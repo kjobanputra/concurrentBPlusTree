@@ -101,7 +101,7 @@ class BPlusTree {
      * @param parent The BPlusTree that this leaf node is a part of
      * @return whether this node is a valid leaf
      */
-    bool IsLeafNode(bool allow_duplicates, bool is_root, BPlusTree *parent) {
+    bool IsLeafNode(bool allow_duplicates, bool is_root, BPlusTree *parent) const {
       if (is_root) {
         CHECK_LE(0, this->filled_keys_);  // Root may even be empty
       } else {
@@ -169,7 +169,7 @@ class BPlusTree {
      * @param next the right sibling of this interior node, or {@code nullptr} if no right sibling exists
      */
     bool IsInteriorNode(bool allow_duplicates, InteriorNode *prev, InteriorNode *next, bool is_root,
-                        BPlusTree *parent) {
+                        BPlusTree *parent) const {
       // Check bounds on number of filled guide posts
       if (is_root) {
         CHECK_LT(0, this->filled_keys_);
@@ -252,7 +252,7 @@ class BPlusTree {
   /**
    * Checks if this B+ Tree is truly a B+ Tree
    */
-  bool IsBplusTree() {
+  bool IsBplusTree() const {
     if (root_->filled_keys_ == 0) {
       // Root is not a valid interior node until we do a split!
       // However, this is only allowed to happen if the depth is truly 1
