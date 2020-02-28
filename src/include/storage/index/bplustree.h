@@ -101,7 +101,7 @@ class BPlusTree {
      * @param parent The BPlusTree that this leaf node is a part of
      * @return whether this node is a valid leaf
      */
-    bool IsLeafNode(bool allow_duplicates, bool is_root, BPlusTree *parent) const {
+    bool IsLeafNode(bool allow_duplicates, bool is_root, const BPlusTree *parent) {
       if (is_root) {
         CHECK_LE(0, this->filled_keys_);  // Root may even be empty
       } else {
@@ -168,8 +168,8 @@ class BPlusTree {
      * @param prev the left sibling of this interior node, or {@code nullptr} if no left sibling exists
      * @param next the right sibling of this interior node, or {@code nullptr} if no right sibling exists
      */
-    bool IsInteriorNode(bool allow_duplicates, InteriorNode *prev, InteriorNode *next, bool is_root,
-                        BPlusTree *parent) const {
+    bool IsInteriorNode(bool allow_duplicates, InteriorNode *prev, InteriorNode *next,
+                        bool is_root, const BPlusTree *parent) {
       // Check bounds on number of filled guide posts
       if (is_root) {
         CHECK_LT(0, this->filled_keys_);
@@ -182,19 +182,19 @@ class BPlusTree {
       for (int i = 0; i <= this->filled_keys_; i++) {
         if (leaf_children_) {
           CHECK(Leaf(i) != nullptr);
-          CHECK(Leaf(i)->IsLeafNode(allow_duplicates));
+          CHECK(Leaf(i)->IsLeafNode(allow_duplicates, false, parent));
 
-          CHECK(i == 0 || (Leaf(i)->prev_ == Leaf(i - 1).as_leaf && Leaf(i - 1)->next_ == Leaf(i)));
+          CHECK(i == 0 || (Leaf(i)->prev_ == Leaf(i - 1) && Leaf(i - 1)->next_ == Leaf(i)));
         } else {
           CHECK(Interior(i) != nullptr);
           CHECK(Interior(i)->IsInteriorNode(true, i == 0 ? prev : Interior(i - 1),
-                                            i == this->filled_keys_ ? next : Interior(i + 1)));
+              i == this->filled_keys_ ? next : Interior(i + 1), false, parent));
         }
       }
 
       // Make sure guide posts are in sorted order with no dupes
       for (int i = 1; i < this->filled_keys_; i++) {
-        CHECK_LT(this->keys_[i - 1], this->keys_[i]);
+        CHECK(parent->KeyCmpLess(this->keys_[i - 1], this->keys_[i]));
       }
 
       // Check to make sure that each child has keys that are in the correct range
@@ -257,7 +257,7 @@ class BPlusTree {
       // Root is not a valid interior node until we do a split!
       // However, this is only allowed to happen if the depth is truly 1
       return depth_ == 1 && root_->leaf_children_ && root_->Leaf(0)->IsLeafNode(allow_duplicates_, true, this) &&
-             root_->Leaf(0)->next_ == nullptr && root_->leaves[0]->prev_ == nullptr;
+             root_->Leaf(0)->next_ == nullptr && root_->Leaf(0)->prev_ == nullptr;
     }
 
     if (!root_->IsInteriorNode(allow_duplicates_, nullptr, nullptr, true, this)) {
@@ -271,7 +271,8 @@ class BPlusTree {
     for (int i = 1; i < depth_; i++) {
       std::queue<InteriorNode *> next_level;
       while (!level.empty()) {
-        auto elem = level.pop();
+        auto elem = level.front();
+        level.pop();
         CHECK(!elem->leaf_children_);
         for (int j = 0; j <= elem->filled_keys_; j++) {
           next_level.push(elem->Interior(j));
@@ -281,8 +282,9 @@ class BPlusTree {
     }
 
     while (!level.empty()) {
-      auto elem = level.pop();
-      CHECK(elem->leaf_children);
+      auto elem = level.front();
+      level.pop();
+      CHECK(elem->leaf_children_);
     }
     return true;
   }
