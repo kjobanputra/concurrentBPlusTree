@@ -5,6 +5,7 @@
 #include <stack>
 #include <utility>
 #include <vector>
+#include <tuple>
 
 #include "common/spin_latch.h"
 
@@ -65,9 +66,9 @@ class BPlusTree {
   };
 
   /**
-   * A generic node represents the common portion of both a LeafNode and an InteriorNode.
+   * A  node represents the common portion of both a LeafNode and an InteriorNode.
    * This allows us to write code that is agnostic to the specifics of a leaf node vs an interior node,
-   * but which only operates on keys and a generic value.
+   * but which only operates on keys and a  value.
    */
   template <typename Value>
   class GenericNode {
@@ -499,41 +500,54 @@ class BPlusTree {
     return {nullptr, 0};
   }
 
-  bool Insert(KeyType k, ValueType v) {
-    TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
-
-    std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
+  // Traverses tree to leaf node while keeping track of path
+  std::tuple<std::vector<InteriorNode *>, std::vector<int>> TraverseTrack(KeyType k, LeafNode *leaf, bool insert_op) {
+    std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split or merged
+    std::vector<uint32_t> indices;
     potential_changes.reserve(depth_);
 
     InteriorNode *current = root_;
-    LeafNode *leaf = nullptr;
     while (leaf == nullptr) {
-      // If we know we do not need to split (e.g. there are still open guide posts,
+      // If we know we do not need to split (e.g. there are still enough open guide posts,
       // then we don't need to keep track of anything above us
-      if (current->filled_keys_ < NUM_CHILDREN - 1) {
+      if (insert_op && current->filled_keys_ < NUM_CHILDREN - 1) { //TODO: Think about if this can be done for delete
         potential_changes.erase(potential_changes.begin(), potential_changes.end());
       }
-      // However, the level below us may still split, so we may still change. Keep track of that
+      // However, the level below us may still split or merged, so we may still change. Keep track of that
       potential_changes.push_back(current);
 
       uint32_t i = 0;
       while (i < current->filled_keys_ && KeyCmpGreaterEqual(k, current->keys_[i])) {
         ++i;
       }
+      if (!insert_op) indices.push_back(i);
 
       // If we've reached the leaf level, break out!
       if (current->leaf_children_) {
         leaf = current->Leaf(i);
-        TERRIER_ASSERT(leaf != nullptr, "Leaves should not be null!!");
+        if (insert_op) { TERRIER_ASSERT(leaf != nullptr, "Insert: Leaves should not be null!!"); }
+        else { TERRIER_ASSERT(leaf != nullptr, "Delete: Leaves should not be null!!"); }
       } else {
         current = current->Interior(i);
       }
     }
 
     // If the leaf definitely has enough room, then we don't need to split anything!
-    if (leaf->filled_keys_ < NUM_CHILDREN) {
+    if (insert_op && leaf->filled_keys_ < NUM_CHILDREN) {
       potential_changes.erase(potential_changes.begin(), potential_changes.end());
     }
+
+    return make_tuple(potential_changes, indices);
+  }
+
+  bool Insert(KeyType k, ValueType v) {
+    TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
+
+    LeafNode *leaf = nullptr;
+
+    // Mark the interior nodes that may be split
+    auto traverse_tuple = TraverseTrack(k, leaf, true);
+    std::vector<InteriorNode *> potential_changes = std::get<0>(traverse_tuple);
 
     uint32_t i = 0;
     while (i < leaf->filled_keys_ && KeyCmpGreater(k, leaf->keys_[i])) {
@@ -737,6 +751,183 @@ class BPlusTree {
 
     TERRIER_ASSERT(IsBplusTree(), "End of insert should result in a valid B+ tree");
   }
+
+  // TODO: @kjobanputra: need to implement this
+  // TODO: replace the current root if root has only 1 child
+  void InteriorNodeMerge(std::vector<InteriorNode*> potential_changes, std::vector<int> indices) {
+    return;
+  }
+
+  // TODO: @kjobanputra: see if any optimizations can be made here
+  // Propagate changes on path taken to get to the key in the 0th index
+  template <typename Value>
+  void Propagate(KeyType old_key, std::vector<InteriorNode*> &potential_changes, std::vector<int> &indices, GenericNode<Value>* node) {
+
+    TERRIER_ASSERT(potential_changes.size() == indices.size(),
+        "indices and potential_changes not of same size in propagate");
+
+    KeyType new_key = node->keys_[0];
+    for (uint32_t i = potential_changes.size(); i >= 0; i--) {
+       if (potential_changes[i][indices[i]] == old_key) potential_changes[i][indices[i]] = new_key;
+    }
+  }
+
+  void ShiftChildrenLeft(std::vector<InteriorNode *> potential_changes, std::vector<uint32_t> indices, KeyType old_key) {
+
+    InteriorNode* parent = potential_changes[potential_changes.size()-1];
+    // parent's parent is the dead leaf's old grandparent
+    std::vector<InteriorNode *> new_potential_changes = potential_changes;
+    new_potential_changes.pop_back();
+    std::vector<uint32_t> new_indices = indices;
+    new_indices.pop_back();
+    uint32_t parent_i = indices[indices.size()-1];
+
+    parent->filled_keys_--;
+    for (uint32_t j = parent_i; j < NUM_CHILDREN; j++) {
+      parent->keys_[j] = parent->keys_[j+1];
+      parent->values_[j] = parent->values_[j+1];
+      if (j == parent_i) {
+        Propagate(old_key, new_potential_changes, new_indices, parent);
+      } else {
+        Propagate(parent->keys_[j-1], new_potential_changes, new_indices, parent);
+      }
+    }
+  }
+
+  // TODO: @kjobanputra may be able to generalize with grouping borrow from left and merge with right and vv
+  // TODO: @kjobanputra: need to consider overflow nodes
+  bool Delete(KeyType k) {
+    TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+
+    LeafNode *leaf = nullptr;
+    auto [ potential_changes, indices ]= TraverseTrack(k, leaf, false);
+
+    // i is the index of the key in the leaf
+    uint32_t i = 0;
+    while(i < leaf->filled_keys_ && KeyCmpGreaterEqual(k, leaf->keys_[i])) {
+      ++i;
+    }
+
+    // Can't delete a key that doesn't exist in the tree
+    if (!KeyCmpEqual(k, leaf->keys_[i])) { return false; }
+
+    // Checking to see if any other nodes need to be modified
+    if (leaf->filled_keys_ < MIN_CHILDREN+1) {
+      if (leaf->prev_ != NULL) {
+        // Case 1: Borrow from left node
+        if (leaf->prev_->filled_keys_ > MIN_CHILDREN) {
+          KeyType old_key = leaf->keys_[0];
+          // Shift over keys and values to make room for a new key and value
+          for (uint32_t j = 0; j < i; j++) {
+            leaf->keys_[j+1] = leaf->keys_[j];
+            leaf->values_[j+1] = leaf->values_[j];
+          }
+          leaf->prev_->filled_keys_--;
+          leaf->keys_[0] = leaf->prev_->keys_[leaf->prev_->filled_keys_];
+          leaf->values_[0] = leaf->prev_->values_[leaf->prev_->filled_keys_];
+          Propagate(old_key, potential_changes, indices, reinterpret_cast<GenericNode<LeafNode *>>(leaf));
+        } else {
+          TERRIER_ASSERT(leaf->prev_->filled_keys_ == MIN_CHILDREN,
+              "Leaf has less than MIN_CHILDREN without deletion in left leaf merge.");
+          // Case 2: Leaf merge with left node
+
+          // Move elements over to the left sibling
+          for (uint32_t j = 0; j < leaf->filled_keys_; j++) {
+            if (j != i) {
+              leaf->prev_->keys_[leaf->prev_->filled_keys_] = leaf->keys_[j];
+              leaf->prev_->values_[leaf->prev_->filled_keys_] = leaf->values_[j];
+              leaf->prev_->filled_keys_++;
+            }
+          }
+
+          KeyType old_key = leaf->keys_[0];
+          // No longer need this leaf node
+          free(leaf);
+
+          // Move over children of parent of dead leaf to the left. We propagate
+          // at each value
+          // TODO: @kjobanputa: potential delay of propagation for interior node merge
+          ShiftChildrenLeft(potential_changes, indices, old_key);
+
+        }
+
+      } else if (leaf->next_ != NULL) {
+        // Case 3: Borrow from right node
+        if (leaf->next_->filled_keys_ > MIN_CHILDREN) {
+
+          // Take key from right sibling
+          for (uint32_t j = i; j < leaf->filled_keys_-2; j++) {
+            leaf->keys_[j] = leaf->keys_[j+1];
+          }
+          KeyType old_key = leaf->next->keys_[0];
+          leaf->keys_[leaf->filled_keys_-1] = leaf->next_->keys_[0];
+          leaf->values_[leaf->filled_keys_-1] = leaf->next->values_[0];
+
+          // Shift over the keys in the right sibling
+          for (uint32_t j = 0; j < leaf->next_->filled_keys_-1; j++) {
+            leaf->next_->keys_[j] = leaf->next_->keys_[i+1];
+            leaf->next_->values_[j] = leaf->next_->values_[i+1];
+          }
+
+          // Need to make a new potential_changes_right vector just for the right sibling,
+          // since the path to the right sibling is currently unknown
+          auto [ potential_changes_right, indices_right ] = TraverseTrack(leaf->next_->keys_[0], nullptr, false);
+          Propagate(old_key, potential_changes_right, indices_right, reinterpret_cast<GenericNode<LeafNode *>>(leaf->next_));
+
+          leaf->next_->filled_keys_--;
+        }
+
+        // Case 4: Leaf merge with right node
+      } else {
+        TERRIER_ASSERT(leaf->next_->filled_keys_ == MIN_CHILDREN,
+            "Leaf has less than MIN_CHILDREN without deletion in right leaf merge.");
+
+        // Make room for incoming keys
+        uint32_t offset = leaf->filled_keys_-1;
+        for (uint32_t j = 0; j < leaf->next_->filled_keys_; j++) {
+          leaf->next_->keys_[j] = leaf->next_->keys_[j+offset];
+          leaf->next_->values_[j] = leaf->next_->keys_[j+offset];
+        }
+
+        for (uint32_t j = 0; j < leaf->filled_keys_-1; j++) {
+          leaf->next_->keys_[j] = leaf->keys_[j];
+          leaf->next_->values_[j] = leaf->values_[j];
+          leaf->next_->filled_keys_++;
+        }
+
+        KeyType old_key = leaf->keys_[0];
+        free(leaf);
+
+        uint32_t parent_i = indices[indices.size()-1];
+        // Only shift over children if the leaf was not the rightmost one
+        if (parent_i == NUM_CHILDREN-1) {
+          ShiftChildrenLeft(potential_changes, indices, old_key);
+        }
+      }
+    } else {
+      // Shift over all the keys and decrement the key count
+      if (i != leaf->filled_keys_-1) {
+        for (uint32_t j = i; j < leaf->filled_keys_-i-1; j++) {
+          leaf->keys_[j] = leaf->keys_[j+1];
+          leaf->values_[j] = leaf->values_[j+1];
+        }
+      }
+      leaf->filled_keys_--;
+
+      if (i == 0) {
+        // Propagate the new value at index 0 to appropriate parent
+        Propagate(k, potential_changes, indices, reinterpret_cast<GenericNode<LeafNode *>>(leaf));
+      }
+    }
+
+    InteriorNodeMerge(potential_changes, indices);
+
+    potential_changes.erase(potential_changes.begin(), potential_changes.end());
+    indices.erase(indices.begin(), indices.end());
+
+    return true;
+  }
+
 };
 
 #undef CHECK
