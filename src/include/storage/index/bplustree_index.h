@@ -137,10 +137,14 @@ class BPlusTreeIndex final : public Index {
     auto scan_itr = bplustree_->begin(index_key);
     auto end_itr = bplustree_->end();
 
-    while (scan_itr != end_itr && bplustree_->KeyCmpEqual(scan_itr.Key(), index_key)) {
+    if (scan_itr != end_itr && bplustree_->KeyCmpEqual(scan_itr.Key(), index_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
-      ++scan_itr;
+
+      // Add any duplicates
+      for (auto value : scan_itr) {
+        if (IsVisible(txn, value)) value_list->emplace_back(value);
+      }
     }
 
     TERRIER_ASSERT(!(metadata_.GetSchema().Unique()) || (metadata_.GetSchema().Unique() && value_list->size() <= 1),
@@ -171,6 +175,11 @@ class BPlusTreeIndex final : public Index {
            (!high_key_exists || scan_itr.Key().PartialLessThan(index_high_key, &metadata_, num_attrs))) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
+
+      // Add any duplicates
+      for (auto value : scan_itr) {
+        if (IsVisible(txn, value)) value_list->emplace_back(value);
+      }
       ++scan_itr;
     }
   }
@@ -193,6 +202,11 @@ class BPlusTreeIndex final : public Index {
     while (scan_itr != end_itr && bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
+
+      // Add any duplicates
+      for (auto value : scan_itr) {
+        if (IsVisible(txn, value)) value_list->emplace_back(value);
+      }
       --scan_itr;
     }
   }
@@ -218,6 +232,11 @@ class BPlusTreeIndex final : public Index {
            bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
       // Perform visibility check on result
       if (IsVisible(txn, scan_itr.Value())) value_list->emplace_back(scan_itr.Value());
+
+      // Add any duplicates
+      for (auto value : scan_itr) {
+        if (IsVisible(txn, value)) value_list->emplace_back(value);
+      }
       --scan_itr;
     }
   }
