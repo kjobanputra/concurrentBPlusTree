@@ -50,9 +50,7 @@ class BPlusTreeIndex final : public Index {
                    "This Insert is designed for secondary indexes with no uniqueness constraints.");
     KeyType index_key;
     index_key.SetFromProjectedRow(tuple, metadata_, metadata_.GetSchema().GetColumns().size());
-    // FIXME(15-721 project2): perform a non-unique unconditional insert into the underlying data structure of the
-    // key/value pair
-    const bool UNUSED_ATTRIBUTE result = true;
+    const bool result = bplustree_->Insert(index_key, location, nullptr);
 
     TERRIER_ASSERT(
         result,
@@ -60,7 +58,7 @@ class BPlusTreeIndex final : public Index {
     // Register an abort action with the txn context in case of rollback
     txn->RegisterAbortAction([=]() {
       // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
-      const bool UNUSED_ATTRIBUTE result = true;
+      const bool result = true;
 
       TERRIER_ASSERT(result, "Delete on the index failed.");
     });
@@ -72,19 +70,18 @@ class BPlusTreeIndex final : public Index {
     TERRIER_ASSERT(metadata_.GetSchema().Unique(), "This Insert is designed for indexes with uniqueness constraints.");
     KeyType index_key;
     index_key.SetFromProjectedRow(tuple, metadata_, metadata_.GetSchema().GetColumns().size());
-    bool predicate_satisfied UNUSED_ATTRIBUTE = false;
+    bool predicate_satisfied = false;
 
     // The predicate checks if any matching keys have write-write conflicts or are still visible to the calling txn.
-    auto predicate UNUSED_ATTRIBUTE = [txn](const TupleSlot slot) -> bool {
+    auto predicate = [txn, &predicate_satisfied](const TupleSlot slot) -> bool {
       const auto *const data_table = slot.GetBlock()->data_table_;
       const auto has_conflict = data_table->HasConflict(*txn, slot);
       const auto is_visible = data_table->IsVisible(*txn, slot);
+      predicate_satisfied = has_conflict || is_visible;
       return has_conflict || is_visible;
     };
 
-    // FIXME(15-721 project2): perform a non-unique CONDITIONAL insert into the underlying data structure of the
-    // key/value pair
-    const bool UNUSED_ATTRIBUTE result = true;
+    const bool result = bplustree_->Insert(index_key, location, predicate);
 
     TERRIER_ASSERT(predicate_satisfied != result, "If predicate is not satisfied then insertion should succeed.");
 
