@@ -307,10 +307,10 @@ class BPlusTree {
     TERRIER_ASSERT(from != nullptr && to != nullptr, "No nullptrs allowed here!");
     // NB: This assert cannot properly check for the node being completely full, since an interior node is
     //     full whenever the number of keys is NUM_CHILDREN - 1 and a leaf node when the number of keys is NUM_CHILDREN
-    TERRIER_ASSERT(from->keycount_ >= NUM_CHILDREN - 1, "Split node should only be called on a full node!");
-    TERRIER_ASSERT(to->keycount_ == 0, "Split node should be called to split into an empty node!");
+    TERRIER_ASSERT(from->filled_keys_ >= NUM_CHILDREN - 1, "Split node should only be called on a full node!");
+    TERRIER_ASSERT(to->filled_keys_ == 0, "Split node should be called to split into an empty node!");
 
-    KeyType *guide_post = nullptr;
+    const KeyType *guide_post = nullptr;
     if (insertion_spot <= NUM_CHILDREN / 2) {
       guide_post = &(from->keys_[NUM_CHILDREN / 2]);
     } else if (insertion_spot == NUM_CHILDREN / 2 + 1) {
@@ -332,17 +332,17 @@ class BPlusTree {
       for (uint32_t j = NUM_CHILDREN / 2; j < insertion_spot; ++j) {
         to->keys_[to->filled_keys_] = from->keys_[j];
         to->values_[to->filled_keys_] = from->values_[j];
-        ++to->keycount_;
+        ++to->filled_keys_;
       }
 
       to->keys_[to->filled_keys_] = k;
-      to->values_[to->filled_values_] = v;
-      ++to->keycount_;
+      to->values_[to->filled_keys_] = v;
+      ++to->filled_keys_;
 
       for (uint32_t j = insertion_spot; j < NUM_CHILDREN; ++j) {
         to->keys_[to->filled_keys_] = from->keys_[j];
-        to->values_[to->filled_values_] = from->values_[j];
-        ++to->keycount_;
+        to->values_[to->filled_keys_] = from->values_[j];
+        ++to->filled_keys_;
       }
     }
     return *guide_post;
@@ -643,7 +643,7 @@ class BPlusTree {
     return {this, nullptr, 0};
   }
 
-  bool Insert(KeyType k, ValueType v) {
+  bool Insert(KeyType k, ValueType v, const std::function<bool(const ValueType &)> &predicate) {
     TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
 
     std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
@@ -686,6 +686,11 @@ class BPlusTree {
 
     // If duplicates are not allowed, do not insert duplicates!
     if (!allow_duplicates_ && KeyCmpEqual(k, leaf->keys_[i])) {
+      if (predicate(leaf->values_[i])) {
+        leaf->values_[i] = v;
+        return true;
+      }
+
       return false;
     }
 
@@ -707,15 +712,15 @@ class BPlusTree {
 
       current_overflow->keys_[current_overflow->filled_keys_] = k;
       current_overflow->values_[current_overflow->filled_keys_] = v;
-      current_overflow->filled_keys++;
+      current_overflow->filled_keys_++;
       return true;
     }
 
     // We need to split!
     if (leaf->filled_keys_ == NUM_CHILDREN) {
       auto *new_leaf = reinterpret_cast<LeafNode *>(calloc(sizeof(LeafNode), 1));
-      KeyType guide_post = split(reinterpret_cast<GenericNode<ValueType> *>(leaf),
-                                 reinterpret_cast<GenericNode<ValueType> *>(new_leaf), i, k, v);
+      KeyType guide_post = SplitNode(reinterpret_cast<GenericNode<ValueType> *>(leaf),
+                                     reinterpret_cast<GenericNode<ValueType> *>(new_leaf), i, k, v);
 
       // These two variables represent where in leaf's overflow nodes we are reading from
       OverflowNode *read_overflow = leaf->overflow_;
@@ -762,7 +767,7 @@ class BPlusTree {
         } else {
           // Lazy allocation still means we have to allocate eventually, and now we know we need allocate
           if (to_overflow == nullptr) {
-            to_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode *), 1));
+            to_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode), 1));
             *to_overflow_alloc = to_overflow;
             to_overflow_alloc = &(to_overflow->next_);
           }
@@ -807,12 +812,12 @@ class BPlusTree {
         to_overflow->filled_keys_ = to_id;
       }
 
-      TERRIER_ASSERT(leaf->IsLeafNode(allow_duplicates_, false), "Old leaf was not preserved as leaf");
-      TERRIER_ASSERT(new_leaf->IsLeafNode(allow_duplicates_, false), "New Leaf not preserved as leaf");
+      TERRIER_ASSERT(leaf->IsLeafNode(allow_duplicates_, false, this), "Old leaf was not preserved as leaf");
+      TERRIER_ASSERT(new_leaf->IsLeafNode(allow_duplicates_, false, this), "New Leaf not preserved as leaf");
 
       TERRIER_ASSERT(!potential_changes.empty(), "Potential changes should not be empty!!");
       TERRIER_ASSERT(
-          potential_changes.front().filled_keys_ < NUM_CHILDREN - 1 || potential_changes.front() == root_,
+          potential_changes.front()->filled_keys_ < NUM_CHILDREN - 1 || potential_changes.front() == root_,
           "Potential changes should contain a front which has room for a new child, or the front should be root_");
 
       // to_insert represents the current node to insert into the parent.
@@ -823,49 +828,49 @@ class BPlusTree {
       auto inner = --potential_changes.rend();
       for (; inner != potential_changes.rbegin(); ++inner) {
         // Find out where to insert this node
-        while (i < inner->filled_keys_ && KeyCmpGreater(guide_post, inner->keys_[i])) {
+        while (i < (*inner)->filled_keys_ && KeyCmpGreater(guide_post, (*inner)->keys_[i])) {
           ++i;
         }
 
-        TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->keys_[i]), "We should not have duplicated guide posts!");
+        TERRIER_ASSERT(!KeyCmpEqual(guide_post, (*inner)->keys_[i]), "We should not have duplicated guide posts!");
 
         // Perform the insert
         auto *new_inner = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
-        guide_post = split(reinterpret_cast<GenericNode<InteriorNode *>>(&(*inner)),
-                           reinterpret_cast<GenericNode<InteriorNode *>>(new_inner), i, guide_post, to_insert);
+        guide_post = SplitNode(reinterpret_cast<GenericNode<InteriorNode *> *>(*inner),
+                               reinterpret_cast<GenericNode<InteriorNode *> *>(new_inner), i, guide_post, to_insert);
         to_insert = new_inner;
       }
 
       // Find out where to insert the final block
-      while (i < inner->filled_keys_ && KeyCmpGreater(guide_post, inner->keys_[i])) {
+      while (i < (*inner)->filled_keys_ && KeyCmpGreater(guide_post, (*inner)->keys_[i])) {
         ++i;
       }
 
-      TERRIER_ASSERT(!KeyCmpEqual(guide_post, inner->keys_[i]), "We should not have duplicated guide posts!");
+      TERRIER_ASSERT(!KeyCmpEqual(guide_post, (*inner)->keys_[i]), "We should not have duplicated guide posts!");
 
       // Can we insert here?
-      if (inner->filled_keys_ < NUM_CHILDREN - 1) {
+      if ((*inner)->filled_keys_ < NUM_CHILDREN - 1) {
         // Yes! Just insert!
-        for (uint32_t j = inner->filled_keys_; j > i; --j) {
-          inner->keys_[j] = inner->keys_[j - 1];
-          inner->Interior(j) = inner->Interior(j - 1);
+        for (uint32_t j = (*inner)->filled_keys_; j > i; --j) {
+          (*inner)->keys_[j] = (*inner)->keys_[j - 1];
+          (*inner)->Interior(j) = (*inner)->Interior(j - 1);
         }
 
-        inner->keys_[i] = guide_post;
-        inner->Interior(i) = to_insert;
+        (*inner)->keys_[i] = guide_post;
+        (*inner)->Interior(i) = to_insert;
       } else {
         // No - we've reached the root and must split
-        TERRIER_ASSERT(inner == root_, "Top level inner potential change should not be full unless it is the root");
+        TERRIER_ASSERT(*inner == root_, "Top level inner potential change should not be full unless it is the root");
 
         // Split the root
         auto *new_inner = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
-        guide_post = split(reinterpret_cast<GenericNode<InteriorNode *>>(&(*inner)),
-                           reinterpret_cast<GenericNode<InteriorNode *>>(new_inner), i, guide_post, to_insert);
+        guide_post = SplitNode(reinterpret_cast<GenericNode<InteriorNode *> *>(*inner),
+                               reinterpret_cast<GenericNode<InteriorNode *> *>(new_inner), i, guide_post, to_insert);
 
         auto *new_root = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
         new_root->keys_[0] = guide_post;
         new_root->filled_keys_ = 1;
-        new_root->Interior(0) = inner;
+        new_root->Interior(0) = *inner;
         new_root->Interior(1) = new_inner;
         root_ = new_root;
       }
@@ -880,6 +885,7 @@ class BPlusTree {
     }
 
     TERRIER_ASSERT(IsBplusTree(), "End of insert should result in a valid B+ tree");
+    return true;
   }
 };
 
