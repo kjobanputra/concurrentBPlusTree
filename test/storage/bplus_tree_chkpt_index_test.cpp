@@ -111,7 +111,7 @@ class BPlusTreeIndexTests : public TerrierTest {
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeIndexTests, UniqueInsert) {
-const uint32_t num_inserts = 100000;  // number of tuples/primary keys for each worker to attempt to insert
+const uint32_t num_inserts = 5;  // number of tuples/primary keys for each worker to attempt to insert
 auto workload = [&](uint32_t worker_id) {
   auto *const key_buffer =
       common::AllocationUtil::AllocateAligned(unique_index_->GetProjectedRowInitializer().ProjectedRowSize());
@@ -170,10 +170,10 @@ std::vector<storage::TupleSlot> results;
 auto *const scan_key_pr = unique_index_->GetProjectedRowInitializer().InitializeRow(key_buffer_1_);
 
 for (uint32_t i = 0; i < num_inserts; i++) {
-*reinterpret_cast<int32_t *>(scan_key_pr->AccessForceNotNull(0)) = i;
-unique_index_->ScanKey(*scan_txn, *scan_key_pr, &results);
-EXPECT_EQ(results.size(), 1);
-results.clear();
+  *reinterpret_cast<int32_t *>(scan_key_pr->AccessForceNotNull(0)) = i;
+  unique_index_->ScanKey(*scan_txn, *scan_key_pr, &results);
+  EXPECT_EQ(results.size(), 1);
+  results.clear();
 }
 
 txn_manager_->Commit(scan_txn, transaction::TransactionUtil::EmptyCallback, nullptr);
