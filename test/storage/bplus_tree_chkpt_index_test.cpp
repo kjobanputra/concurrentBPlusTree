@@ -111,7 +111,7 @@ class BPlusTreeIndexTests : public TerrierTest {
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeIndexTests, UniqueInsert) {
-const uint32_t num_inserts = 10000;  // number of tuples/primary keys for each worker to attempt to insert
+const uint32_t num_inserts = 100000;  // number of tuples/primary keys for each worker to attempt to insert
 auto workload = [&](uint32_t worker_id) {
   auto *const key_buffer =
       common::AllocationUtil::AllocateAligned(unique_index_->GetProjectedRowInitializer().ProjectedRowSize());
@@ -188,7 +188,7 @@ EXPECT_GT(unique_index_->GetHeapUsage(), 0);
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeIndexTests, DefaultInsert) {
-const uint32_t num_inserts = 10000;  // number of tuples/primary keys for each worker to attempt to insert
+const uint32_t num_inserts = 100000;  // number of tuples/primary keys for each worker to attempt to insert
 auto workload = [&](uint32_t worker_id) {
   auto *const key_buffer =
       common::AllocationUtil::AllocateAligned(default_index_->GetProjectedRowInitializer().ProjectedRowSize());
