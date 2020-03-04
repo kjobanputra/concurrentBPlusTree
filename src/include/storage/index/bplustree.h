@@ -312,8 +312,8 @@ class BPlusTree {
     }
   };
 
-  std::shared_mutex testing_latch_;
-  std::shared_mutex root_latch_;
+  mutable std::shared_mutex testing_latch_;
+  mutable std::shared_mutex root_latch_;
   InteriorNode *root_;
   uint32_t depth_;
   bool allow_duplicates_;
@@ -416,7 +416,7 @@ class BPlusTree {
    * Finds the first index i in node where node->keys_[i] <= k,
    * or node->filled_keys_ if such an index does not exist
    */
-  uint32_t FindKey(const LeafNode *node, KeyType k) {
+  uint32_t FindKey(const LeafNode *node, KeyType k) const {
     uint32_t i = 0;
     while (i < node->filled_keys_ && KeyCmpGreater(k, node->keys_[i])) {
       ++i;
@@ -428,7 +428,7 @@ class BPlusTree {
    * Finds the first index i in node where node->keys_[i] < k,
    * or node->filled_keys_ if such a node does not exist.
    */
-  uint32_t FindKey(const InteriorNode *node, KeyType k) {
+  uint32_t FindKey(const InteriorNode *node, KeyType k) const {
     uint32_t i = 1;
     while(i < node->filled_keys_ && KeyCmpGreaterEqual(k, node->keys_[i])) {
       ++i;
@@ -443,7 +443,7 @@ class BPlusTree {
    *
    * @return the leaf that should contain k
    */
-  LeafNode *TraverseTrack(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes) {
+  LeafNode *TraverseTrack(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes) const {
     InteriorNode *current = root;
     LeafNode *leaf = nullptr;
     while (leaf == nullptr) {
@@ -824,13 +824,29 @@ class BPlusTree {
     }
 
     /**
+     * Releases the lock the iterator holds on its current key and immediately invalidates this iterator
+     */
+    void ReleaseLock() {
+      if(current_) {
+        current_->latch_.unlock_shared();
+      }
+      current_ = nullptr;
+      index_ = 0;
+    }
+
+    /**
      * Moves to the immediately greater key, or the end of the tree if there are no more keys.
      * @returns a reference to this iterator.
      */
     KeyIterator &operator++() {
       index_++;
       if (index_ >= current_->filled_keys_) {
-        current_ = current_->next_;
+        auto *next = current_->next_;
+        if(next) {
+          next->latch_.lock_shared();
+        }
+        current_->latch_.unlock_shared();
+        current_ = next;
         index_ = 0;
       }
       return *this;
@@ -852,7 +868,12 @@ class BPlusTree {
      */
     KeyIterator &operator--() {
       if (index_ == 0) {
-        current_ = current_->prev_;
+        auto *prev = current_->prev_;
+        if(prev) {
+          prev->latch_.lock_shared();
+        }
+        current_->latch_.unlock_shared();
+        current_ = prev;
         index_ = current_->filled_keys_ - 1;
       } else {
         index_--;
@@ -915,11 +936,25 @@ class BPlusTree {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif
+    bool have_latch = false;
+    while (!have_latch) {
+      root_latch_.lock_shared();
+      have_latch = root_->latch_.try_lock_shared();
+      root_latch_.unlock_shared();
+    }
+
     InteriorNode *current = root_;
     while (!current->leaf_children_) {
+      auto *next = current->Interior(0);
+      next->latch_.lock_shared();
+      current->latch_.unlock_shared();
       current = current->Interior(0);
     }
-    return {this, current->Leaf(0), 0};
+
+    auto *leaf = current->Leaf(0);
+    leaf->latch_.lock_shared();
+    current->latch_.unlock_shared();
+    return {this, leaf, 0};
   }
 
   /**
@@ -932,25 +967,29 @@ class BPlusTree {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif
+    bool have_latch = false;
+    while (!have_latch) {
+      root_latch_.lock_shared();
+      have_latch = root_->latch_.try_lock_shared();
+      root_latch_.unlock_shared();
+    }
+
     InteriorNode *current = root_;
     //current->latch_.lock_shared();
     LeafNode *leaf = nullptr;
 
     // Do a search for the right-most leaf with keys < this key
     while (leaf == nullptr) {
-      uint32_t child = 1;
-      while (child < current->filled_keys_ && KeyCmpGreaterEqual(key, current->keys_[child])) {
-        child++;
-      }
+      uint32_t child = FindKey(current, key) - 1;
       if (current->leaf_children_) {
-        leaf = current->Leaf(child - 1);
-        //leaf->latch_.lock_shared();
-        //current->latch_.unlock_shared();
+        leaf = current->Leaf(child);
+        leaf->latch_.lock_shared();
+        current->latch_.unlock_shared();
         TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
       } else {
-        auto *next = current->Interior(child - 1);
-        //next->latch_.lock_shared();
-        //current->latch_.unlock_shared();
+        auto *next = current->Interior(child);
+        next->latch_.lock_shared();
+        current->latch_.unlock_shared();
         current = next;
       }
     }
@@ -963,6 +1002,10 @@ class BPlusTree {
     }
 
     // Key exists in the next node over
+    if(leaf->next_) {
+      leaf->next_->latch_.lock_shared();
+    }
+    leaf->latch_.unlock_shared();
     return {this, leaf->next_, 0};
   }
 

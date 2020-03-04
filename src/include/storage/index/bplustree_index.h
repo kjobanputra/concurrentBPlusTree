@@ -144,6 +144,8 @@ class BPlusTreeIndex final : public Index {
       }
     }
 
+    scan_itr.ReleaseLock();
+
     TERRIER_ASSERT(!(metadata_.GetSchema().Unique()) || (metadata_.GetSchema().Unique() && value_list->size() <= 1),
                    "Invalid number of results for unique index.");
   }
@@ -179,6 +181,7 @@ class BPlusTreeIndex final : public Index {
       }
       ++scan_itr;
     }
+    scan_itr.ReleaseLock();
   }
 
   void ScanDescending(const transaction::TransactionContext &txn, const ProjectedRow &low_key,
@@ -206,6 +209,7 @@ class BPlusTreeIndex final : public Index {
       }
       --scan_itr;
     }
+    scan_itr.ReleaseLock();
   }
 
   void ScanLimitDescending(const transaction::TransactionContext &txn, const ProjectedRow &low_key,
@@ -237,6 +241,7 @@ class BPlusTreeIndex final : public Index {
       }
       --scan_itr;
     }
+    scan_itr.ReleaseLock();
   }
 };
 
