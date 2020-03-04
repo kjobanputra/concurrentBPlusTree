@@ -808,12 +808,18 @@ class BPlusTree {
       while (read_overflow != nullptr && KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
         read_id++;
         write_id++;
-        if (read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
+        while (read_id == OVERFLOW_SIZE ||
+            (read_overflow != nullptr && read_id >= read_overflow->filled_keys_)) {
           read_overflow = read_overflow->next_;
           read_id = 0;
           write_overflow = write_overflow->next_;
           write_id = 0;
         }
+      }
+
+      if(read_overflow != nullptr && read_id >= read_overflow->filled_keys_) {
+        read_overflow = read_overflow->next_;
+        read_id = 0;
       }
 
       // For every other overflow element, move it either from leaf to leaf (in another slot) or from leaf to
@@ -853,8 +859,9 @@ class BPlusTree {
 
         // Advance the read index
         read_id++;
-        if (read_id == OVERFLOW_SIZE || read_id == read_overflow->filled_keys_) {
-          read_overflow = read_overflow->next_;
+        while (read_id == OVERFLOW_SIZE ||
+            (read_overflow != nullptr && read_id >= read_overflow->filled_keys_)) {
+            read_overflow = read_overflow->next_;
           read_id = 0;
         }
       }
