@@ -154,6 +154,15 @@ class BPlusTree {
       return true;
     }
 
+    size_t GetHeapUsage() {
+      size_t usage = sizeof(LeafNode);
+
+      for(OverflowNode *current = overflow_; current != nullptr; current = current->next_) {
+        usage += sizeof(OverflowNode);
+      }
+      return usage;
+    }
+
     friend class BPlusTree;
 
     static LeafNode *CreateNew() {
@@ -300,6 +309,20 @@ class BPlusTree {
       }
 
       return true;
+    }
+
+    size_t GetHeapUsage() {
+      size_t usage = sizeof(InteriorNode);
+
+      for(int i = 0; i < this->filled_keys_; i++) {
+        if(leaf_children_) {
+          usage += Leaf(i)->GetHeapUsage();
+        } else {
+          usage += Interior(i)->GetHeapUsage();
+        }
+      }
+
+      return usage;
     }
 
     friend class BPlusTree;
@@ -1139,6 +1162,13 @@ class BPlusTree {
     TERRIER_ASSERT(IsBplusTree(), "Insert must return a valid B+ Tree");
 #endif
     return true;
+  }
+
+  size_t GetHeapUsage() {
+#ifdef DEEP_DEBUG
+    TERRIER_ASSERT(IsBplusTree(), "GetHeapUsage mulsled on a valid B+ Tree");
+#endif
+    return sizeof(BPlusTree) + root_->GetHeapUsage();
   }
 };
 
