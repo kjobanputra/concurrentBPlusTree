@@ -112,7 +112,7 @@ class BPlusTree {
     LeafNode *next_;
     OverflowNode *overflow_;
 
-    bool Contains(KeyType k, const BPlusTree *parent) {
+    bool Contains(KeyType k, const BPlusTree *parent) const {
       for(int i = 0; i < this->filled_keys_; i++) {
         if(parent->KeyCmpEqual(this->keys_[i], k)) {
           return true;
