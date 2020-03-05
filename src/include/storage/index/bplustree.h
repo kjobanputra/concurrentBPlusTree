@@ -312,8 +312,6 @@ class BPlusTree {
     }
   };
 
-  mutable std::shared_mutex testing_latch_;
-  mutable std::shared_mutex root_latch_;
   InteriorNode *root_;
   uint32_t depth_;
   bool allow_duplicates_;
@@ -1127,11 +1125,9 @@ class BPlusTree {
         new_root->filled_keys_ = 2;
         new_root->Interior(0) = *inner;
         new_root->Interior(1) = new_inner;
-        root_latch_.lock();
         depth_++;
         root_ = new_root;
         (*inner)->latch_.unlock();
-        root_latch_.unlock();
       }
     } else {
       TERRIER_ASSERT(potential_changes.empty(), "Should not have any potential changes if we did not need to split!");
