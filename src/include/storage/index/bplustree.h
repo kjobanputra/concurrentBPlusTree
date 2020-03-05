@@ -13,6 +13,9 @@
 
 #include "common/spin_latch.h"
 
+
+#include <execution/sql/memory_pool.h>
+
 namespace terrier::storage::index {
 /**
  * These macros are private to this file - see the #undef at the bottom
@@ -70,6 +73,8 @@ template <typename KeyType, typename ValueType, typename KeyComparator = std::le
           typename ValueEqualityChecker = std::equal_to<ValueType>>
 class BPlusTree {
  private:
+  static execution::sql::MemoryPool mem_pool_;
+
   /**
    * This inner class defines what an overflow node looks like. An overflow node
    * is defined to only contain duplicate keys of the LeafNode it is attached to
@@ -82,6 +87,15 @@ class BPlusTree {
     OverflowNode *next_;
 
     friend class BPlusTree;
+
+    static OverflowNode *CreateNew() {
+      auto *node = reinterpret_cast<OverflowNode*>(mem_pool_.Allocate(sizeof(OverflowNode), true));
+      return node;
+    }
+
+    static void Delete(OverflowNode *elem) {
+      mem_pool_.Deallocate(elem, sizeof(OverflowNode));
+    }
   };
 
   /**
@@ -92,7 +106,7 @@ class BPlusTree {
   template <typename Value>
   class GenericNode {
    protected:
-    uint32_t filled_keys_;
+    uint32_t filled_keys_ = 0;
     KeyType keys_[NUM_CHILDREN];
     Value values_[NUM_CHILDREN];
     mutable std::shared_mutex latch_;
@@ -165,11 +179,16 @@ class BPlusTree {
 
     friend class BPlusTree;
 
+
     static LeafNode *CreateNew() {
-      LeafNode *node = reinterpret_cast<LeafNode *>(calloc(sizeof(class LeafNode), 1));
+      auto *node = reinterpret_cast<LeafNode *>(mem_pool_.Allocate(sizeof(class LeafNode), true));
       // Initialize the shared mutex
       new (&node->latch_) std::shared_mutex();
       return node;
+    }
+
+    static void Delete(LeafNode *elem) {
+      mem_pool_.Deallocate(elem, sizeof(LeafNode));
     }
   };
 
@@ -328,10 +347,14 @@ class BPlusTree {
     friend class BPlusTree;
 
     static InteriorNode *CreateNew() {
-      InteriorNode *node = reinterpret_cast<InteriorNode *>(calloc(sizeof(class LeafNode), 1));
+      auto *node = reinterpret_cast<InteriorNode *>(mem_pool_.Allocate(sizeof(class LeafNode), 1));
       // Initialize the shared mutex
       new (&node->latch_) std::shared_mutex();
       return node;
+    }
+
+    static void Delete(InteriorNode *elem) {
+      mem_pool_.Deallocate(elem, sizeof(InteriorNode));
     }
   };
 
@@ -564,7 +587,7 @@ class BPlusTree {
       } else {
         // Lazy allocation still means we have to allocate eventually, and now we know we need allocate
         if (to_overflow == nullptr) {
-          to_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode), 1));
+          to_overflow = OverflowNode::CreateNew();
           *to_overflow_alloc = to_overflow;
           to_overflow_alloc = &(to_overflow->next_);
         }
@@ -600,7 +623,7 @@ class BPlusTree {
       temp->next_ = nullptr;
       while (write_overflow != nullptr) {
         temp = write_overflow->next_;
-        free(write_overflow);
+        OverflowNode::Delete(write_overflow);
         write_overflow = temp;
       }
     }
@@ -1089,7 +1112,7 @@ class BPlusTree {
         current_overflow = current_overflow->next_;
       }
       if (current_overflow == nullptr) {
-        current_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode), 1));
+        current_overflow = OverflowNode::CreateNew();
         *prev_overflow = current_overflow;
       }
 
@@ -1171,6 +1194,11 @@ class BPlusTree {
     return sizeof(BPlusTree) + root_->GetHeapUsage();
   }
 };
+
+template <typename KeyType, typename ValueType, typename KeyComparator,
+    typename KeyEqualityChecker, typename KeyHashFunc,
+    typename ValueEqualityChecker>
+execution::sql::MemoryPool BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc, ValueEqualityChecker>::mem_pool_{nullptr};
 
 #undef CHECK
 #undef CHECK_LT

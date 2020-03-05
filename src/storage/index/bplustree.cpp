@@ -1,3 +1,7 @@
 #include "storage/index/bplustree.h"
 
-namespace terrier::storage::index {}
+#include <execution/sql/memory_pool.h>
+
+namespace terrier::storage::index {
+
+}
