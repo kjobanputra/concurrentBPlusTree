@@ -60,7 +60,7 @@ constexpr uint32_t NUM_CHILDREN = 5;
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 100;
+constexpr uint32_t OVERFLOW_SIZE = 5;
 
 /**
  * Minimum number of children an interior node is allowed to have
@@ -109,13 +109,12 @@ class BPlusTree {
     /**
      * Helper function to wait as a writer for other writers to finish
      * NOTE: Does not wait for readers to finish
-     * NOTE: At end of function you hold this lock's mutex
+     * @param lock The held lock coming into this function
      */
-    void WriterWait() {
-      mutex_.lock();
+    void WriterWait(std::unique_lock<std::mutex> &lock) {
       num_waiting_writers_++;
       while (state_ != Open) {
-        writer_waiters_.wait(&mutex_);
+        writer_waiters_.wait(lock);
       }
       num_waiting_writers_--;
     }
@@ -127,37 +126,35 @@ class BPlusTree {
      * @param left_to_right When moving left-to-right across the leaves, pass in true. Used for deadlock avoidance.
      */
     void LockShared(LeafLock *release, bool left_to_right) {
-      mutex_.lock();
+      std::unique_lock<std::mutex> lock(mutex_);
       while (state_ != Open && state_ != Reserved) {
         if (state_ == Leader) {
           if (release == right_ || release == left_) {
             // Allowed to keep locking, num_readers_ should already include me
-            mutex_.unlock();
             return;
           }
         } else {
           TERRIER_ASSERT(state_ == Follower, "Invalid state for LeafLock");
           if (release == leader_) {
             // Allowed to keep locking, num_readers_ should already include me
-            mutex_.unlock();
             return;
           }
         }
         // We must wait and aren't allowed in
         if (left_to_right) {
           // Could possibly deadlock here with two readers starving out writers, so introduce a timeout
-          auto result = reader_waiters_.wait_for(&mutex_, std::chrono::milliseconds(100));
+          auto result = reader_waiters_.wait_for(lock, std::chrono::milliseconds(100));
           if (result == std::cv_status::timeout && num_readers_ > 0) {
             // Jump in as a reader to avoid deadlock
             break;
           }
         } else {
-          reader_waiters_.wait(&mutex_);
+          reader_waiters_.wait(lock);
         }
       }
       // State is open, simple hand over hand
       num_readers_++;
-      mutex_.unlock();
+      lock.unlock();
       if (release != nullptr) {
         release->Unlock();
       }
@@ -168,25 +165,24 @@ class BPlusTree {
      * and then block readers until unlocked.
      */
     void LockExclusive() {
+      std::unique_lock<std::mutex> lock(mutex_);
       // Wait for all writers to finish
-      WriterWait();
+      WriterWait(lock);
       // Exclusive mode, so leader w/ no left or right
       state_ = Leader;
       left_ = nullptr;
       right_ = nullptr;
 
       while (num_readers_ > 0) {
-        writer_waiters_.wait(&mutex_);
+        writer_waiters_.wait(lock);
       }
-
-      mutex_.unlock();
     }
 
     /**
      * Unlocks this lock, either as a reader or a writer.
      */
     void Unlock() {
-      mutex_.lock();
+      std::unique_lock<std::mutex> lock(mutex_);
       switch (state_) {
         case Open:
         case Reserved:
@@ -212,7 +208,7 @@ class BPlusTree {
           } else {
             reader_waiters_.notify_all();
           }
-          mutex_.unlock();
+          lock.unlock();
           if (left_ != nullptr) {
             left_->Release();
           }
@@ -222,7 +218,7 @@ class BPlusTree {
           break;
         case Follower:
           // Must update count on leader
-          mutex_.unlock();
+          lock.unlock();
           leader_->mutex_.lock();
           TERRIER_ASSERT(leader_->num_readers_ > 0, "Unlock called too many times");
           leader_->num_readers_--;
@@ -246,26 +242,31 @@ class BPlusTree {
     static void ExclusiveLockGroup(LeafLock *left, LeafLock *middle, LeafLock *right) {
       // First, reserve from left to right to avoid deadlock
       if (left != nullptr) {
-        left->WriterWait();
+        std::unique_lock<std::mutex> lock(left->mutex_);
+        left->WriterWait(lock);
         left->state_ = Reserved;
-        left->mutex_.unlock();
       }
 
       TERRIER_ASSERT(middle != nullptr, "Middle should not be NULL!");
+      middle->mutex.lock();
       middle->WriterWait();
       middle->state_ = Reserved;
       middle->mutex_.unlock();
 
       if (right != nullptr) {
-        right->WriterWait();
+        std::unique_lock<std::mutex> lock(right->mutex_);
+        right->WriterWait(lock);
+        right->state_ = Reserved;
       }
 
       // Now, we are the first writer for all three, so atomically update their states
-      // (we already hold right's mutex)
       if (left != nullptr) {
         left->mutex_.lock();
       }
       middle->mutex_.lock();
+      if (right != nullptr) {
+        left->mutex_.lock();
+      }
 
       // Middle becomes leader, with all readers counting towards it
       middle->state_ = Leader;
@@ -329,7 +330,6 @@ class BPlusTree {
     uint32_t filled_keys_ = 0;
     KeyType keys_[NUM_CHILDREN];
     Value values_[NUM_CHILDREN];
-    mutable std::shared_mutex latch_;
 
     friend class BPlusTree;
   };
@@ -345,6 +345,7 @@ class BPlusTree {
     LeafNode *prev_;
     LeafNode *next_;
     OverflowNode *overflow_;
+    mutable LeafLock latch_;
 
     bool Contains(KeyType k, const BPlusTree *parent) const {
       for(int i = 0; i < this->filled_keys_; i++) {
@@ -399,11 +400,10 @@ class BPlusTree {
 
     friend class BPlusTree;
 
-
     static LeafNode *CreateNew() {
       auto *node = reinterpret_cast<LeafNode *>(mem_pool_.Allocate(sizeof(class LeafNode), true));
       // Initialize the shared mutex
-      new (&node->latch_) std::shared_mutex();
+      new (&node->latch_) LeafLock();
       return node;
     }
 
@@ -431,6 +431,7 @@ class BPlusTree {
   class InteriorNode : public GenericNode<Child> {
    private:
     bool leaf_children_;
+    mutable std::shared_mutex latch_;
 
     /**
      * Gets a reference to the i^th child assuming that the children of this node
@@ -729,7 +730,7 @@ class BPlusTree {
       // If we've reached the leaf level, break out!
       if (current->leaf_children_) {
         leaf = current->Leaf(i);
-        leaf->latch_.lock();
+        leaf->latch_.LockExclusive();
         TERRIER_ASSERT(leaf != nullptr, "Leaves should not be null!!");
       } else {
         current = current->Interior(i);
@@ -863,7 +864,7 @@ class BPlusTree {
     TERRIER_ASSERT(from->IsLeafNode(allow_duplicates_, false, this), "Old leaf was not preserved as leaf");
     TERRIER_ASSERT(to->IsLeafNode(allow_duplicates_, false, this), "New Leaf not preserved as leaf");
 
-    from->latch_.unlock();
+    from->latch_.Unlock();
     return guide_post;
   }
 
@@ -1091,8 +1092,8 @@ class BPlusTree {
      * Releases the lock the iterator holds on its current key and immediately invalidates this iterator
      */
     void ReleaseLock() {
-      if(current_) {
-        current_->latch_.unlock_shared();
+      if (current_) {
+        current_->latch_.Unlock();
       }
       current_ = nullptr;
       index_ = 0;
@@ -1106,10 +1107,9 @@ class BPlusTree {
       index_++;
       if (index_ >= current_->filled_keys_) {
         auto *next = current_->next_;
-        if(next) {
-          next->latch_.lock_shared();
+        if (next) {
+          next->latch_.LockShared(&current_->latch_, true);
         }
-        current_->latch_.unlock_shared();
         current_ = next;
         index_ = 0;
       }
@@ -1133,10 +1133,9 @@ class BPlusTree {
     KeyIterator &operator--() {
       if (index_ == 0) {
         auto *prev = current_->prev_;
-        if(prev) {
-          prev->latch_.lock_shared();
+        if (prev) {
+          prev->latch_.LockShared(&current_->latch_, false);
         }
-        current_->latch_.unlock_shared();
         current_ = prev;
         index_ = current_->filled_keys_ - 1;
       } else {
@@ -1217,7 +1216,7 @@ class BPlusTree {
     }
 
     auto *leaf = current->Leaf(0);
-    leaf->latch_.lock_shared();
+    leaf->latch_.LockShared(nullptr, false);
     current->latch_.unlock_shared();
     return {this, leaf, 0};
   }
@@ -1249,7 +1248,7 @@ class BPlusTree {
       uint32_t child = FindKey(current, key) - 1;
       if (current->leaf_children_) {
         leaf = current->Leaf(child);
-        leaf->latch_.lock_shared();
+        leaf->latch_.LockShared(nullptr, false);
         current->latch_.unlock_shared();
         TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
       } else {
@@ -1268,11 +1267,13 @@ class BPlusTree {
     }
 
     // Key exists in the next node over
-    if(leaf->next_) {
-      leaf->next_->latch_.lock_shared();
+    LeafNode *next = leaf->next_;
+    if (next) {
+      next->latch_.LockShared(&leaf->latch_, true);
+    } else {
+      leaf->latch_.Unlock();
     }
-    leaf->latch_.unlock_shared();
-    return {this, leaf->next_, 0};
+    return {this, next, 0};
   }
 
   const KeyIterator end() const {  // NOLINT for STL name compability
@@ -1309,11 +1310,11 @@ class BPlusTree {
 
       if (!predicate(leaf->values_[i])) {
         leaf->values_[i] = v;
-        leaf->latch_.unlock();
+        leaf->latch_.Unlock();
         return true;
       }
 
-      leaf->latch_.unlock();
+      leaf->latch_.Unlock();
       return false;
     }
 
@@ -1339,7 +1340,7 @@ class BPlusTree {
       current_overflow->keys_[current_overflow->filled_keys_] = k;
       current_overflow->values_[current_overflow->filled_keys_] = v;
       current_overflow->filled_keys_++;
-      leaf->latch_.unlock();
+      leaf->latch_.Unlock();
       return true;
     }
 
@@ -1398,7 +1399,7 @@ class BPlusTree {
     } else {
       TERRIER_ASSERT(potential_changes.empty(), "Should not have any potential changes if we did not need to split!");
       InsertIntoNode(leaf, i, k, v);
-      leaf->latch_.unlock();
+      leaf->latch_.Unlock();
     }
 
 #ifdef DEEP_DEBUG
