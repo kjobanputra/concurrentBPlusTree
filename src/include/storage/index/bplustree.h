@@ -60,7 +60,7 @@ constexpr uint32_t NUM_CHILDREN = 5;
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 5;
+constexpr uint32_t OVERFLOW_SIZE = 100;
 
 /**
  * Minimum number of children an interior node is allowed to have
@@ -74,6 +74,226 @@ template <typename KeyType, typename ValueType, typename KeyComparator = std::le
 class BPlusTree {
  private:
   static execution::sql::MemoryPool mem_pool_;
+
+  class LeafLock {
+   private:
+    std::mutex mutex_;
+    std::condition_variable reader_waiters_;
+    std::condition_variable writer_waiters_;
+    uint32_t num_waiting_writers_;
+
+    enum {Open, Leader, Follower, Reserved} state_;
+    union {
+      LeafLock *leader_;
+      struct {
+        LeafLock *right_;
+        LeafLock *left_;
+      };
+    };
+    uint32_t num_readers_;
+
+    /**
+     * Helper function to set state to Open and notify waiting writer or readers
+     */
+    void Release() {
+      mutex_.lock();
+      state_ = Open;
+      if (num_waiting_writers_ > 0) {
+        writer_waiters_.notify_one();
+      } else {
+        reader_waiters_.notify_all();
+      }
+      mutex_.unlock();
+    }
+
+    /**
+     * Helper function to wait as a writer for other writers to finish
+     * NOTE: Does not wait for readers to finish
+     * NOTE: At end of function you hold this lock's mutex
+     */
+    void WriterWait() {
+      mutex_.lock();
+      num_waiting_writers_++;
+      while (state_ != Open) {
+        writer_waiters_.wait(&mutex_);
+      }
+      num_waiting_writers_--;
+    }
+
+   public:
+    /**
+     * Locks this LeafLock as a reader, coming from the given leaf lock, or nullptr if not coming from any lock.
+     * @param release The lock that this function should release after locking itself. Can be nullptr.
+     * @param left_to_right When moving left-to-right across the leaves, pass in true. Used for deadlock avoidance.
+     */
+    void LockShared(LeafLock *release, bool left_to_right) {
+      mutex_.lock();
+      while (state_ != Open && state_ != Reserved) {
+        if (state_ == Leader) {
+          if (release == right_ || release == left_) {
+            // Allowed to keep locking, num_readers_ should already include me
+            mutex_.unlock();
+            return;
+          }
+        } else {
+          TERRIER_ASSERT(state_ == Follower, "Invalid state for LeafLock");
+          if (release == leader_) {
+            // Allowed to keep locking, num_readers_ should already include me
+            mutex_.unlock();
+            return;
+          }
+        }
+        // We must wait and aren't allowed in
+        if (left_to_right) {
+          // Could possibly deadlock here with two readers starving out writers, so introduce a timeout
+          auto result = reader_waiters_.wait_for(&mutex_, std::chrono::milliseconds(100));
+          if (result == std::cv_status::timeout && num_readers_ > 0) {
+            // Jump in as a reader to avoid deadlock
+            break;
+          }
+        } else {
+          reader_waiters_.wait(&mutex_);
+        }
+      }
+      // State is open, simple hand over hand
+      num_readers_++;
+      mutex_.unlock();
+      if (release != nullptr) {
+        release->Unlock();
+      }
+    }
+
+    /**
+     * Locks this LeafLock as a writer. Will block until all reads/writes are done,
+     * and then block readers until unlocked.
+     */
+    void LockExclusive() {
+      // Wait for all writers to finish
+      WriterWait();
+      // Exclusive mode, so leader w/ no left or right
+      state_ = Leader;
+      left_ = nullptr;
+      right_ = nullptr;
+
+      while (num_readers_ > 0) {
+        writer_waiters_.wait(&mutex_);
+      }
+
+      mutex_.unlock();
+    }
+
+    /**
+     * Unlocks this lock, either as a reader or a writer.
+     */
+    void Unlock() {
+      mutex_.lock();
+      switch (state_) {
+        case Open:
+        case Reserved:
+          // Open/reserved should only be unlocked by readers
+          TERRIER_ASSERT(num_readers_ > 0, "Unlock called too many times");
+          num_readers_--;
+          break;
+        case Leader:
+          if (num_readers_ > 0) {
+            num_readers_--;
+            // See if writer is ready
+            if (num_readers_ == 0) {
+              writer_waiters_.notify_one();
+            }
+            break;
+          }
+          TERRIER_ASSERT(left_ == nullptr || left_->num_readers_ == 0, "Invalid count for left");
+          TERRIER_ASSERT(right_ == nullptr || right_->num_readers_ == 0, "Invalid count for left");
+
+          state_ = Open;
+          if (num_waiting_writers_ > 0) {
+            writer_waiters_.notify_one();
+          } else {
+            reader_waiters_.notify_all();
+          }
+          mutex_.unlock();
+          if (left_ != nullptr) {
+            left_->Release();
+          }
+          if (right_ != nullptr) {
+            right_->Release();
+          }
+          break;
+        case Follower:
+          // Must update count on leader
+          mutex_.unlock();
+          leader_->mutex_.lock();
+          TERRIER_ASSERT(leader_->num_readers_ > 0, "Unlock called too many times");
+          leader_->num_readers_--;
+          // See if writer is ready
+          if (leader_->num_readers_ == 0) {
+            leader_->writer_waiters_.notify_one();
+          }
+          leader_->mutex_.unlock();
+          break;
+      }
+    }
+
+    /**
+     * Locks the group of locks left, middle, right, in such a way that they all will
+     * have exclusive access, and current readers moving either left to right or
+     * right to left will not deadlock with this operation (as they will be allowed to complete).
+     * @param left The left lock to lock. Can be nullptr.
+     * @param middle The middle lock to lock. Cannot be nullptr. Once done, call unlock on this lock.
+     * @param right The right lock to lock. Can be nullptr.
+     */
+    static void ExclusiveLockGroup(LeafLock *left, LeafLock *middle, LeafLock *right) {
+      // First, reserve from left to right to avoid deadlock
+      if (left != nullptr) {
+        left->WriterWait();
+        left->state_ = Reserved;
+        left->mutex_.unlock();
+      }
+
+      TERRIER_ASSERT(middle != nullptr, "Middle should not be NULL!");
+      middle->WriterWait();
+      middle->state_ = Reserved;
+      middle->mutex_.unlock();
+
+      if (right != nullptr) {
+        right->WriterWait();
+      }
+
+      // Now, we are the first writer for all three, so atomically update their states
+      // (we already hold right's mutex)
+      if (left != nullptr) {
+        left->mutex_.lock();
+      }
+      middle->mutex_.lock();
+
+      // Middle becomes leader, with all readers counting towards it
+      middle->state_ = Leader;
+      middle->left_ = left;
+      middle->right_ = right;
+      middle->num_readers_ = (left == nullptr ? 0 : left->num_readers_) + (right == nullptr ? 0 : right->num_readers_);
+
+      // Left + right become followers, with no readers
+      if (left != nullptr) {
+        left->state_ = Follower;
+        left->leader_ = middle;
+        left->num_readers_ = 0;
+        left->mutex_.unlock();
+      }
+      if (right != nullptr) {
+        right->state_ = Follower;
+        right->leader = middle;
+        right->num_readers_ = 0;
+        right->mutex_.unlock();
+      }
+
+      // Wait for the middle to be signalled
+      while (middle->num_readers_ > 0) {
+        middle->writer_waiters_.wait(&middle->mutex_);
+      }
+      middle->mutex_.unlock();
+    }
+  };
 
   /**
    * This inner class defines what an overflow node looks like. An overflow node
