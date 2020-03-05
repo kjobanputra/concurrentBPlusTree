@@ -105,7 +105,7 @@ class BPlusTree {
     LeafNode *next_;
     OverflowNode *overflow_;
 
-    bool Contains(KeyType k, const BPlusTree *parent) {
+    bool Contains(KeyType k, const BPlusTree *parent) const {
       for(int i = 0; i < this->filled_keys_; i++) {
         if(parent->KeyCmpEqual(this->keys_[i], k)) {
           return true;
@@ -436,7 +436,7 @@ class BPlusTree {
    * Finds the first index i in node where node->keys_[i] <= k,
    * or node->filled_keys_ if such an index does not exist
    */
-  uint32_t FindKey(const LeafNode *node, KeyType k) {
+  uint32_t FindKey(const LeafNode *node, KeyType k) const {
     uint32_t i = 0;
     while (i < node->filled_keys_ && KeyCmpGreater(k, node->keys_[i])) {
       ++i;
@@ -448,7 +448,7 @@ class BPlusTree {
    * Finds the first index i in node where node->keys_[i] < k,
    * or node->filled_keys_ if such a node does not exist.
    */
-  uint32_t FindKey(const InteriorNode *node, KeyType k) {
+  uint32_t FindKey(const InteriorNode *node, KeyType k) const {
     uint32_t i = 1;
     while(i < node->filled_keys_ && KeyCmpGreaterEqual(k, node->keys_[i])) {
       ++i;
