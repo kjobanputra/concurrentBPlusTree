@@ -936,11 +936,12 @@ class BPlusTree {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif
-    bool have_latch = false;
-    while (!have_latch) {
-      root_latch_.lock_shared();
-      have_latch = root_->latch_.try_lock_shared();
-      root_latch_.unlock_shared();
+    InteriorNode *save = root_;
+    save->latch_.lock_shared();
+    while (save != root_) {
+      save->latch_.unlock_shared();
+      save = root_;
+      save->latch_.lock_shared();
     }
 
     InteriorNode *current = root_;
@@ -967,15 +968,16 @@ class BPlusTree {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif
-    bool have_latch = false;
-    while (!have_latch) {
-      root_latch_.lock_shared();
-      have_latch = root_->latch_.try_lock_shared();
-      root_latch_.unlock_shared();
+
+    InteriorNode *save = root_;
+    save->latch_.lock_shared();
+    while (save != root_) {
+      save->latch_.unlock_shared();
+      save = root_;
+      save->latch_.lock_shared();
     }
 
     InteriorNode *current = root_;
-    //current->latch_.lock_shared();
     LeafNode *leaf = nullptr;
 
     // Do a search for the right-most leaf with keys < this key
@@ -1023,11 +1025,12 @@ class BPlusTree {
     std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
     potential_changes.reserve(depth_);
 
-    bool have_latch = false;
-    while (!have_latch) {
-      root_latch_.lock_shared();
-      have_latch = root_->latch_.try_lock();
-      root_latch_.unlock_shared();
+    InteriorNode *save = root_;
+    save->latch_.lock();
+    while (save != root_) {
+      save->latch_.unlock();
+      save = root_;
+      save->latch_.lock();
     }
 
     LeafNode *leaf = TraverseTrack(root_, k, &potential_changes);
