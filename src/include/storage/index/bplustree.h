@@ -684,33 +684,33 @@ class BPlusTree {
    * If key1 < key2 return true
    * If not return false
    */
-  inline bool KeyCmpLess(const KeyType &key1, const KeyType &key2) const { return key_cmp_obj_(key1, key2); }
+  bool KeyCmpLess(const KeyType &key1, const KeyType &key2) const { return key_cmp_obj_(key1, key2); }
 
   /*
    * KeyCmpEqual() - Compare a pair of keys for equality
    *
    * This functions compares keys for equality relation
    */
-  inline bool KeyCmpEqual(const KeyType &key1, const KeyType &key2) const { return key_eq_obj_(key1, key2); }
+  bool KeyCmpEqual(const KeyType &key1, const KeyType &key2) const { return key_eq_obj_(key1, key2); }
 
   /*
    * KeyCmpGreaterEqual() - Compare a pair of keys for >= relation
    *
    * It negates result of keyCmpLess()
    */
-  inline bool KeyCmpGreaterEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpLess(key1, key2); }
+  bool KeyCmpGreaterEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpLess(key1, key2); }
 
   /*
    * KeyCmpGreater() - Compare a pair of keys for > relation
    *
    * It flips input for keyCmpLess()
    */
-  inline bool KeyCmpGreater(const KeyType &key1, const KeyType &key2) const { return KeyCmpLess(key2, key1); }
+  bool KeyCmpGreater(const KeyType &key1, const KeyType &key2) const { return KeyCmpLess(key2, key1); }
 
   /*
    * KeyCmpLessEqual() - Compare a pair of keys for <= relation
    */
-  inline bool KeyCmpLessEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpGreater(key1, key2); }
+  bool KeyCmpLessEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpGreater(key1, key2); }
 
   // Forward declaration for friend classing
   class KeyIterator;
