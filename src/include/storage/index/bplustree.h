@@ -13,6 +13,9 @@
 
 #include "common/spin_latch.h"
 
+
+#include <execution/sql/memory_pool.h>
+
 namespace terrier::storage::index {
 /**
  * These macros are private to this file - see the #undef at the bottom
@@ -70,6 +73,8 @@ template <typename KeyType, typename ValueType, typename KeyComparator = std::le
           typename ValueEqualityChecker = std::equal_to<ValueType>>
 class BPlusTree {
  private:
+  static execution::sql::MemoryPool mem_pool_;
+
   /**
    * This inner class defines what an overflow node looks like. An overflow node
    * is defined to only contain duplicate keys of the LeafNode it is attached to
@@ -82,6 +87,15 @@ class BPlusTree {
     OverflowNode *next_;
 
     friend class BPlusTree;
+
+    static OverflowNode *CreateNew() {
+      auto *node = reinterpret_cast<OverflowNode*>(mem_pool_.Allocate(sizeof(OverflowNode), true));
+      return node;
+    }
+
+    static void Delete(OverflowNode *elem) {
+      mem_pool_.Deallocate(elem, sizeof(OverflowNode));
+    }
   };
 
   /**
@@ -92,7 +106,7 @@ class BPlusTree {
   template <typename Value>
   class GenericNode {
    protected:
-    uint32_t filled_keys_;
+    uint32_t filled_keys_ = 0;
     KeyType keys_[NUM_CHILDREN];
     Value values_[NUM_CHILDREN];
     mutable std::shared_mutex latch_;
@@ -113,7 +127,7 @@ class BPlusTree {
     OverflowNode *overflow_;
 
     bool Contains(KeyType k, const BPlusTree *parent) const {
-      for(int i = 0; i < this->filled_keys_; i++) {
+      for(uint32_t i = 0; i < this->filled_keys_; i++) {
         if(parent->KeyCmpEqual(this->keys_[i], k)) {
           return true;
         }
@@ -138,7 +152,7 @@ class BPlusTree {
 
       CHECK(allow_duplicates || overflow_ == nullptr);
 
-      for (int i = 1; i < this->filled_keys_; i++) {
+      for (uint32_t i = 1; i < this->filled_keys_; i++) {
         CHECK(parent->KeyCmpLess(this->keys_[i - 1], this->keys_[i]));
         CHECK(!parent->KeyCmpEqual(this->keys_[i - 1], this->keys_[i]));
       }
@@ -147,20 +161,34 @@ class BPlusTree {
         if(current->next_ != nullptr) {
           CHECK(current->filled_keys_ == OVERFLOW_SIZE);
         }
-        for(int i = 0; i < current->filled_keys_; i++) {
+        for(uint32_t i = 0; i < current->filled_keys_; i++) {
           CHECK(Contains(current->keys_[i], parent));
         }
       }
       return true;
     }
 
+    size_t GetHeapUsage() {
+      size_t usage = sizeof(LeafNode);
+
+      for(OverflowNode *current = overflow_; current != nullptr; current = current->next_) {
+        usage += sizeof(OverflowNode);
+      }
+      return usage;
+    }
+
     friend class BPlusTree;
 
+
     static LeafNode *CreateNew() {
-      LeafNode *node = reinterpret_cast<LeafNode *>(calloc(sizeof(class LeafNode), 1));
+      auto *node = reinterpret_cast<LeafNode *>(mem_pool_.Allocate(sizeof(class LeafNode), true));
       // Initialize the shared mutex
       new (&node->latch_) std::shared_mutex();
       return node;
+    }
+
+    static void Delete(LeafNode *elem) {
+      mem_pool_.Deallocate(elem, sizeof(LeafNode));
     }
   };
 
@@ -220,7 +248,7 @@ class BPlusTree {
       CHECK_LE(this->filled_keys_, NUM_CHILDREN);
 
       // Check to make sure that every child is a valid node
-      for (int i = 0; i < this->filled_keys_; i++) {
+      for (uint32_t i = 0; i < this->filled_keys_; i++) {
         if (leaf_children_) {
           CHECK(Leaf(i) != nullptr);
           CHECK(Leaf(i)->IsLeafNode(allow_duplicates, false, parent));
@@ -249,18 +277,18 @@ class BPlusTree {
       // Check to make sure 0'th key is never touched - only if in debug mode
       DEBUG_ONLY_RUN(
       char *empty_key = reinterpret_cast<char*>(&this->keys_[0]);
-      for(int i = 0; i < sizeof(KeyType); i++) {
+      for(uint32_t i = 0; i < sizeof(KeyType); i++) {
           CHECK(empty_key[i] == '\0');
       }
       );
 
       // Make sure guide posts are in sorted order with no dupes
-      for (int i = 2; i < this->filled_keys_; i++) {
+      for (uint32_t i = 2; i < this->filled_keys_; i++) {
         CHECK(parent->KeyCmpLess(this->keys_[i - 1], this->keys_[i]));
       }
 
       // Check to make sure that each child has keys that are in the correct range
-      for (int i = 1; i < this->filled_keys_; i++) {
+      for (uint32_t i = 1; i < this->filled_keys_; i++) {
         if (leaf_children_) {
           auto leaf = Leaf(i);
           CHECK(parent->KeyCmpLessEqual(this->keys_[i], leaf->keys_[0]));
@@ -302,13 +330,31 @@ class BPlusTree {
       return true;
     }
 
+    size_t GetHeapUsage() {
+      size_t usage = sizeof(InteriorNode);
+
+      for(uint32_t i = 0; i < this->filled_keys_; i++) {
+        if(leaf_children_) {
+          usage += Leaf(i)->GetHeapUsage();
+        } else {
+          usage += Interior(i)->GetHeapUsage();
+        }
+      }
+
+      return usage;
+    }
+
     friend class BPlusTree;
 
     static InteriorNode *CreateNew() {
-      InteriorNode *node = reinterpret_cast<InteriorNode *>(calloc(sizeof(class LeafNode), 1));
+      auto *node = reinterpret_cast<InteriorNode *>(mem_pool_.Allocate(sizeof(class LeafNode), 1));
       // Initialize the shared mutex
       new (&node->latch_) std::shared_mutex();
       return node;
+    }
+
+    static void Delete(InteriorNode *elem) {
+      mem_pool_.Deallocate(elem, sizeof(InteriorNode));
     }
   };
 
@@ -492,15 +538,15 @@ class BPlusTree {
 
     // These two variables represent where in from's overflow nodes we are reading from
     OverflowNode *read_overflow = from->overflow_;
-    int read_id = 0;
+    uint32_t read_id = 0;
 
     // These two variables represent where in from's overflow nodes we are writing to
     OverflowNode *write_overflow = from->overflow_;
-    int write_id = 0;
+    uint32_t write_id = 0;
 
     // These two variables represent where in to's overflow nodes we are writing to
     OverflowNode *to_overflow = nullptr;
-    int to_id = 0;
+    uint32_t to_id = 0;
 
     // Unlike in from, we might have to allocate new overflow leaves. This is where we should write the
     // pointer in order to ensure that the link is created - we do it this way to support lazy allocation
@@ -541,7 +587,7 @@ class BPlusTree {
       } else {
         // Lazy allocation still means we have to allocate eventually, and now we know we need allocate
         if (to_overflow == nullptr) {
-          to_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode), 1));
+          to_overflow = OverflowNode::CreateNew();
           *to_overflow_alloc = to_overflow;
           to_overflow_alloc = &(to_overflow->next_);
         }
@@ -577,7 +623,7 @@ class BPlusTree {
       temp->next_ = nullptr;
       while (write_overflow != nullptr) {
         temp = write_overflow->next_;
-        free(write_overflow);
+        OverflowNode::Delete(write_overflow);
         write_overflow = temp;
       }
     }
@@ -657,13 +703,13 @@ class BPlusTree {
     // which way you go down the tree
     std::queue<InteriorNode *> level;
     level.push(root_);
-    for (int i = 1; i < depth_; i++) {
+    for (uint32_t i = 1; i < depth_; i++) {
       std::queue<InteriorNode *> next_level;
       while (!level.empty()) {
         auto elem = level.front();
         level.pop();
         CHECK(!elem->leaf_children_);
-        for (int j = 0; j < elem->filled_keys_; j++) {
+        for (uint32_t j = 0; j < elem->filled_keys_; j++) {
           next_level.push(elem->Interior(j));
         }
       }
@@ -684,33 +730,33 @@ class BPlusTree {
    * If key1 < key2 return true
    * If not return false
    */
-  inline bool KeyCmpLess(const KeyType &key1, const KeyType &key2) const { return key_cmp_obj_(key1, key2); }
+  bool KeyCmpLess(const KeyType &key1, const KeyType &key2) const { return key_cmp_obj_(key1, key2); }
 
   /*
    * KeyCmpEqual() - Compare a pair of keys for equality
    *
    * This functions compares keys for equality relation
    */
-  inline bool KeyCmpEqual(const KeyType &key1, const KeyType &key2) const { return key_eq_obj_(key1, key2); }
+  bool KeyCmpEqual(const KeyType &key1, const KeyType &key2) const { return key_eq_obj_(key1, key2); }
 
   /*
    * KeyCmpGreaterEqual() - Compare a pair of keys for >= relation
    *
    * It negates result of keyCmpLess()
    */
-  inline bool KeyCmpGreaterEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpLess(key1, key2); }
+  bool KeyCmpGreaterEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpLess(key1, key2); }
 
   /*
    * KeyCmpGreater() - Compare a pair of keys for > relation
    *
    * It flips input for keyCmpLess()
    */
-  inline bool KeyCmpGreater(const KeyType &key1, const KeyType &key2) const { return KeyCmpLess(key2, key1); }
+  bool KeyCmpGreater(const KeyType &key1, const KeyType &key2) const { return KeyCmpLess(key2, key1); }
 
   /*
    * KeyCmpLessEqual() - Compare a pair of keys for <= relation
    */
-  inline bool KeyCmpLessEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpGreater(key1, key2); }
+  bool KeyCmpLessEqual(const KeyType &key1, const KeyType &key2) const { return !KeyCmpGreater(key1, key2); }
 
   // Forward declaration for friend classing
   class KeyIterator;
@@ -1066,7 +1112,7 @@ class BPlusTree {
         current_overflow = current_overflow->next_;
       }
       if (current_overflow == nullptr) {
-        current_overflow = reinterpret_cast<OverflowNode *>(calloc(sizeof(OverflowNode), 1));
+        current_overflow = OverflowNode::CreateNew();
         *prev_overflow = current_overflow;
       }
 
@@ -1140,7 +1186,19 @@ class BPlusTree {
 #endif
     return true;
   }
+
+  size_t GetHeapUsage() const {
+#ifdef DEEP_DEBUG
+    TERRIER_ASSERT(IsBplusTree(), "GetHeapUsage mulsled on a valid B+ Tree");
+#endif
+    return sizeof(BPlusTree) + root_->GetHeapUsage();
+  }
 };
+
+template <typename KeyType, typename ValueType, typename KeyComparator,
+    typename KeyEqualityChecker, typename KeyHashFunc,
+    typename ValueEqualityChecker>
+execution::sql::MemoryPool BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc, ValueEqualityChecker>::mem_pool_{nullptr};
 
 #undef CHECK
 #undef CHECK_LT
