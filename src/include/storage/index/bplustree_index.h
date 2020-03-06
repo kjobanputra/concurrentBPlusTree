@@ -130,7 +130,6 @@ class BPlusTreeIndex final : public Index {
     KeyType index_key;
     index_key.SetFromProjectedRow(key, metadata_, metadata_.GetSchema().GetColumns().size());
 
-    common::SpinLatch::ScopedSpinLatch(bplustree_->guard());
     // Perform lookup in BPlusTree
     auto scan_itr = bplustree_->begin(index_key);
     auto end_itr = bplustree_->end();
@@ -144,6 +143,8 @@ class BPlusTreeIndex final : public Index {
         if (IsVisible(txn, value)) value_list->emplace_back(value);
       }
     }
+
+    scan_itr.ReleaseLock();
 
     TERRIER_ASSERT(!(metadata_.GetSchema().Unique()) || (metadata_.GetSchema().Unique() && value_list->size() <= 1),
                    "Invalid number of results for unique index.");
@@ -165,7 +166,6 @@ class BPlusTreeIndex final : public Index {
     if (low_key_exists) index_low_key.SetFromProjectedRow(*low_key, metadata_, num_attrs);
     if (high_key_exists) index_high_key.SetFromProjectedRow(*high_key, metadata_, num_attrs);
 
-    common::SpinLatch::ScopedSpinLatch(bplustree_->guard());
     auto scan_itr = low_key_exists ? bplustree_->begin(index_low_key) : bplustree_->begin();
     auto end_itr = bplustree_->end();
 
@@ -181,6 +181,7 @@ class BPlusTreeIndex final : public Index {
       }
       ++scan_itr;
     }
+    scan_itr.ReleaseLock();
   }
 
   void ScanDescending(const transaction::TransactionContext &txn, const ProjectedRow &low_key,
@@ -193,7 +194,6 @@ class BPlusTreeIndex final : public Index {
     index_high_key.SetFromProjectedRow(high_key, metadata_, metadata_.GetSchema().GetColumns().size());
 
     // Perform lookup in BwTree
-    common::SpinLatch::ScopedSpinLatch(bplustree_->guard());
     auto scan_itr = bplustree_->begin(index_high_key);
     auto end_itr = bplustree_->end();
     // Back up one element if we didn't match the high key
@@ -209,6 +209,7 @@ class BPlusTreeIndex final : public Index {
       }
       --scan_itr;
     }
+    scan_itr.ReleaseLock();
   }
 
   void ScanLimitDescending(const transaction::TransactionContext &txn, const ProjectedRow &low_key,
@@ -224,7 +225,6 @@ class BPlusTreeIndex final : public Index {
 
     // Perform lookup in BwTree
 
-    common::SpinLatch::ScopedSpinLatch(bplustree_->guard());
     auto scan_itr = bplustree_->begin(index_high_key);
     auto end_itr = bplustree_->end();
     // Back up one element if we didn't match the high key
@@ -241,6 +241,7 @@ class BPlusTreeIndex final : public Index {
       }
       --scan_itr;
     }
+    scan_itr.ReleaseLock();
   }
 };
 

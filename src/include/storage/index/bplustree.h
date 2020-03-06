@@ -7,6 +7,9 @@
 #include <stack>
 #include <utility>
 #include <vector>
+#include <mutex>  // For std::unique_lock
+#include <shared_mutex>
+#include <thread>
 
 #include "common/spin_latch.h"
 
@@ -41,6 +44,9 @@ namespace terrier::storage::index {
 #define DEBUG_ONLY_DEFINE(x) x
 #define DEBUG_ONLY_RUN(x) do { x } while(0)
 #endif
+
+// Only define if you wish IsBplusTree to be run before every insert/scan
+// #define DEEP_DEBUG
 
 /**
  * Number of children an interior node is allowed to have, or
@@ -89,6 +95,7 @@ class BPlusTree {
     uint32_t filled_keys_;
     KeyType keys_[NUM_CHILDREN];
     Value values_[NUM_CHILDREN];
+    mutable std::shared_mutex latch_;
 
     friend class BPlusTree;
   };
@@ -148,6 +155,13 @@ class BPlusTree {
     }
 
     friend class BPlusTree;
+
+    static LeafNode *CreateNew() {
+      LeafNode *node = reinterpret_cast<LeafNode *>(calloc(sizeof(class LeafNode), 1));
+      // Initialize the shared mutex
+      new (&node->latch_) std::shared_mutex();
+      return node;
+    }
   };
 
   class InteriorNode;
@@ -274,6 +288,8 @@ class BPlusTree {
         CHECK((next == nullptr && last_leaf->next_ == nullptr) ||
               (next != nullptr && last_leaf->next_ == next->Leaf(0)));
 
+
+        TERRIER_ASSERT(next == nullptr || parent->KeyCmpLessEqual(last_leaf->keys_[last_leaf->filled_keys_ - 1], next->Leaf(0)->keys_[0]), "beep boop");
         CHECK(next == nullptr ||
               parent->KeyCmpLessEqual(last_leaf->keys_[last_leaf->filled_keys_ - 1], next->Leaf(0)->keys_[0]));
       } else {
@@ -287,60 +303,22 @@ class BPlusTree {
     }
 
     friend class BPlusTree;
+
+    static InteriorNode *CreateNew() {
+      InteriorNode *node = reinterpret_cast<InteriorNode *>(calloc(sizeof(class LeafNode), 1));
+      // Initialize the shared mutex
+      new (&node->latch_) std::shared_mutex();
+      return node;
+    }
   };
 
   InteriorNode *root_;
   uint32_t depth_;
-  common::SpinLatch guard_;
   bool allow_duplicates_;
   KeyComparator key_cmp_obj_;
   KeyEqualityChecker key_eq_obj_;
   KeyHashFunc key_hash_obj_;
   ValueEqualityChecker value_eq_obj_;
-
-  /**
-   * Checks if this B+ Tree is truly a B+ Tree
-   */
-  [[nodiscard]] bool IsBplusTree() const {
-    if (root_->filled_keys_ == 1) {
-      // Root is not a valid interior node until we do a split!
-      // However, this is only allowed to happen if the depth is truly 1
-      CHECK(depth_ == 1);
-      CHECK(root_->leaf_children_);
-      CHECK(root_->Leaf(0)->IsLeafNode(allow_duplicates_, true, this));
-      CHECK(root_->Leaf(0)->next_ == nullptr && root_->Leaf(0)->prev_ == nullptr);
-      return true;
-    }
-
-    if (!root_->IsInteriorNode(allow_duplicates_, nullptr, nullptr, true, this)) {
-      return false;
-    }
-
-    // Check to make sure that the depth of the tree is the same regardless of
-    // which way you go down the tree
-    std::queue<InteriorNode *> level;
-    level.push(root_);
-    for (int i = 1; i < depth_; i++) {
-      std::queue<InteriorNode *> next_level;
-      while (!level.empty()) {
-        auto elem = level.front();
-        level.pop();
-        CHECK(!elem->leaf_children_);
-        for (int j = 0; j < elem->filled_keys_; j++) {
-          next_level.push(elem->Interior(j));
-        }
-      }
-      level = std::move(next_level);
-    }
-
-    while (!level.empty()) {
-      auto elem = level.front();
-      level.pop();
-      CHECK(elem->leaf_children_);
-    }
-    return true;
-  }
-
 
   /**
    * Inserts the key/value pair into a node that still has room
@@ -463,15 +441,20 @@ class BPlusTree {
    *
    * @return the leaf that should contain k
    */
-  LeafNode *TraverseTrack(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes) {
+  LeafNode *TraverseTrack(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes) const {
     InteriorNode *current = root;
     LeafNode *leaf = nullptr;
     while (leaf == nullptr) {
+
       // If we know we do not need to split (e.g. there are still open guide posts,
       // then we don't need to keep track of anything above us
       if (current->filled_keys_ < NUM_CHILDREN) {
+        for(const auto &interior : *potential_changes) {
+          interior->latch_.unlock();
+        }
         potential_changes->erase(potential_changes->begin(), potential_changes->end());
       }
+
       // However, the level below us may still split, so we may still change. Keep track of that
       potential_changes->push_back(current);
 
@@ -480,14 +463,20 @@ class BPlusTree {
       // If we've reached the leaf level, break out!
       if (current->leaf_children_) {
         leaf = current->Leaf(i);
+        leaf->latch_.lock();
         TERRIER_ASSERT(leaf != nullptr, "Leaves should not be null!!");
       } else {
         current = current->Interior(i);
+        current->latch_.lock();
       }
     }
 
+
     // If the leaf definitely has enough room, then we don't need to split anything!
     if (leaf->filled_keys_ < NUM_CHILDREN) {
+      for(const auto &interior : *potential_changes) {
+        interior->latch_.unlock();
+      }
       potential_changes->erase(potential_changes->begin(), potential_changes->end());
     }
 
@@ -608,6 +597,7 @@ class BPlusTree {
     TERRIER_ASSERT(from->IsLeafNode(allow_duplicates_, false, this), "Old leaf was not preserved as leaf");
     TERRIER_ASSERT(to->IsLeafNode(allow_duplicates_, false, this), "New Leaf not preserved as leaf");
 
+    from->latch_.unlock();
     return guide_post;
   }
 
@@ -639,14 +629,53 @@ class BPlusTree {
         key_eq_obj_(key_eq_obj),
         key_hash_obj_(key_hash_obj),
         value_eq_obj_(value_eq_obj) {
-    root_ = reinterpret_cast<InteriorNode *>(calloc(sizeof(class InteriorNode), 1));
+    root_ = InteriorNode::CreateNew();
     root_->leaf_children_ = true;
     root_->filled_keys_ = 1;
-    root_->Leaf(0) = reinterpret_cast<LeafNode *>(calloc(sizeof(class LeafNode), 1));
+    root_->Leaf(0) = LeafNode::CreateNew();
   }
 
-  common::SpinLatch *guard() {
-    return &guard_;
+  /**
+   * Checks if this B+ Tree is truly a B+ Tree
+   */
+  [[nodiscard]] bool IsBplusTree() const {
+    if (root_->filled_keys_ == 1) {
+      // Root is not a valid interior node until we do a split!
+      // However, this is only allowed to happen if the depth is truly 1
+      CHECK(depth_ == 1);
+      CHECK(root_->leaf_children_);
+      CHECK(root_->Leaf(0)->IsLeafNode(allow_duplicates_, true, this));
+      CHECK(root_->Leaf(0)->next_ == nullptr && root_->Leaf(0)->prev_ == nullptr);
+      return true;
+    }
+
+    if (!root_->IsInteriorNode(allow_duplicates_, nullptr, nullptr, true, this)) {
+      return false;
+    }
+
+    // Check to make sure that the depth of the tree is the same regardless of
+    // which way you go down the tree
+    std::queue<InteriorNode *> level;
+    level.push(root_);
+    for (int i = 1; i < depth_; i++) {
+      std::queue<InteriorNode *> next_level;
+      while (!level.empty()) {
+        auto elem = level.front();
+        level.pop();
+        CHECK(!elem->leaf_children_);
+        for (int j = 0; j < elem->filled_keys_; j++) {
+          next_level.push(elem->Interior(j));
+        }
+      }
+      level = std::move(next_level);
+    }
+
+    while (!level.empty()) {
+      auto elem = level.front();
+      level.pop();
+      CHECK(elem->leaf_children_);
+    }
+    return true;
   }
 
   /*
@@ -793,13 +822,29 @@ class BPlusTree {
     }
 
     /**
+     * Releases the lock the iterator holds on its current key and immediately invalidates this iterator
+     */
+    void ReleaseLock() {
+      if(current_ != nullptr) {
+        current_->latch_.unlock_shared();
+      }
+      current_ = nullptr;
+      index_ = 0;
+    }
+
+    /**
      * Moves to the immediately greater key, or the end of the tree if there are no more keys.
      * @returns a reference to this iterator.
      */
     KeyIterator &operator++() {
       index_++;
       if (index_ >= current_->filled_keys_) {
-        current_ = current_->next_;
+        auto *next = current_->next_;
+        if(next) {
+          next->latch_.lock_shared();
+        }
+        current_->latch_.unlock_shared();
+        current_ = next;
         index_ = 0;
       }
       return *this;
@@ -821,7 +866,12 @@ class BPlusTree {
      */
     KeyIterator &operator--() {
       if (index_ == 0) {
-        current_ = current_->prev_;
+        auto *prev = current_->prev_;
+        if(prev) {
+          prev->latch_.lock_shared();
+        }
+        current_->latch_.unlock_shared();
+        current_ = prev;
         index_ = current_->filled_keys_ - 1;
       } else {
         index_--;
@@ -881,12 +931,29 @@ class BPlusTree {
    * @return the iterator
    */
   KeyIterator begin() const {  // NOLINT for STL name compability
+#ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
+#endif
+    InteriorNode *save = root_;
+    save->latch_.lock_shared();
+    while (save != root_) {
+      save->latch_.unlock_shared();
+      save = root_;
+      save->latch_.lock_shared();
+    }
+
     InteriorNode *current = root_;
     while (!current->leaf_children_) {
+      auto *next = current->Interior(0);
+      next->latch_.lock_shared();
+      current->latch_.unlock_shared();
       current = current->Interior(0);
     }
-    return {this, current->Leaf(0), 0};
+
+    auto *leaf = current->Leaf(0);
+    leaf->latch_.lock_shared();
+    current->latch_.unlock_shared();
+    return {this, leaf, 0};
   }
 
   /**
@@ -896,21 +963,34 @@ class BPlusTree {
    * @return the iterator
    */
   KeyIterator begin(const KeyType &key) const {  // NOLINT for STL name compability
+#ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
+#endif
+
+    InteriorNode *save = root_;
+    save->latch_.lock_shared();
+    while (save != root_) {
+      save->latch_.unlock_shared();
+      save = root_;
+      save->latch_.lock_shared();
+    }
+
     InteriorNode *current = root_;
     LeafNode *leaf = nullptr;
 
     // Do a search for the right-most leaf with keys < this key
     while (leaf == nullptr) {
-      uint32_t child = 1;
-      while (child < current->filled_keys_ && KeyCmpGreaterEqual(key, current->keys_[child])) {
-        child++;
-      }
+      uint32_t child = FindKey(current, key) - 1;
       if (current->leaf_children_) {
-        leaf = current->Leaf(child - 1);
+        leaf = current->Leaf(child);
+        leaf->latch_.lock_shared();
+        current->latch_.unlock_shared();
         TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
       } else {
-        current = current->Interior(child - 1);
+        auto *next = current->Interior(child);
+        next->latch_.lock_shared();
+        current->latch_.unlock_shared();
+        current = next;
       }
     }
 
@@ -922,6 +1002,10 @@ class BPlusTree {
     }
 
     // Key exists in the next node over
+    if(leaf->next_) {
+      leaf->next_->latch_.lock_shared();
+    }
+    leaf->latch_.unlock_shared();
     return {this, leaf->next_, 0};
   }
 
@@ -930,13 +1014,22 @@ class BPlusTree {
   }
 
   bool Insert(KeyType k, ValueType v, bool allow_duplicates, const std::function<bool(const ValueType &)> &predicate) {
-    common::SpinLatch::ScopedSpinLatch guard(&guard_);
-
     this->allow_duplicates_ = allow_duplicates;
+
+#ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
+#endif
 
     std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
     potential_changes.reserve(depth_);
+
+    InteriorNode *save = root_;
+    save->latch_.lock();
+    while (save != root_) {
+      save->latch_.unlock();
+      save = root_;
+      save->latch_.lock();
+    }
 
     LeafNode *leaf = TraverseTrack(root_, k, &potential_changes);
 
@@ -944,16 +1037,25 @@ class BPlusTree {
 
     // If duplicates are not allowed, do not insert duplicates!
     if (!allow_duplicates_ && i != leaf->filled_keys_ && KeyCmpEqual(k, leaf->keys_[i])) {
+      for (const auto &interior : potential_changes) {
+        interior->latch_.unlock();
+      }
+
       if (!predicate(leaf->values_[i])) {
         leaf->values_[i] = v;
+        leaf->latch_.unlock();
         return true;
       }
 
+      leaf->latch_.unlock();
       return false;
     }
 
     // If duplicates _are_ allowed, then insert into the overflow node, allocating a new one as necessary
     if (i != leaf->filled_keys_ && KeyCmpEqual(k, leaf->keys_[i])) {
+      for (const auto &interior : potential_changes) {
+        interior->latch_.unlock();
+      }
       OverflowNode *current_overflow = leaf->overflow_;
 
       // In case at any point current_overflow is null, keep track of the location where the previous block
@@ -971,12 +1073,13 @@ class BPlusTree {
       current_overflow->keys_[current_overflow->filled_keys_] = k;
       current_overflow->values_[current_overflow->filled_keys_] = v;
       current_overflow->filled_keys_++;
+      leaf->latch_.unlock();
       return true;
     }
 
     // We need to split!
     if (leaf->filled_keys_ == NUM_CHILDREN) {
-      auto *new_leaf = reinterpret_cast<LeafNode *>(calloc(sizeof(LeafNode), 1));
+      auto *new_leaf = LeafNode::CreateNew();
       KeyType guide_post = SplitLeaf(leaf, new_leaf, i, k, v);
 
       TERRIER_ASSERT(!potential_changes.empty(), "Potential changes should not be empty!!");
@@ -992,10 +1095,11 @@ class BPlusTree {
       auto inner = --potential_changes.end();
       bool leaf_children = true;
       for (; inner != potential_changes.begin(); --inner) {
-        auto *new_inner = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
+        auto *new_inner = InteriorNode::CreateNew();
         new_inner->leaf_children_ = leaf_children;
         leaf_children = false;
         guide_post = SplitInterior(*inner, new_inner, guide_post, to_insert.as_interior_);
+        (*inner)->latch_.unlock();
         to_insert.as_interior_ = new_inner;
       }
 
@@ -1006,28 +1110,34 @@ class BPlusTree {
         TERRIER_ASSERT(!KeyCmpEqual(guide_post, (*inner)->keys_[i]), "We should not have duplicated guide posts!");
 
         InsertIntoNode(*inner, i, guide_post, to_insert);
+        (*inner)->latch_.unlock();
       } else {
         // No - we've reached the root and must split
         TERRIER_ASSERT(*inner == root_, "Top level inner potential change should not be full unless it is the root");
 
         // Split the root
-        auto *new_inner = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
+        auto *new_inner = InteriorNode::CreateNew();
         new_inner->leaf_children_ = leaf_children;
         guide_post = SplitInterior(*inner, new_inner, guide_post, to_insert.as_interior_);
 
-        auto *new_root = reinterpret_cast<InteriorNode *>(calloc(sizeof(InteriorNode), 1));
+        auto *new_root = InteriorNode::CreateNew();
         new_root->keys_[1] = guide_post;
         new_root->filled_keys_ = 2;
         new_root->Interior(0) = *inner;
         new_root->Interior(1) = new_inner;
         depth_++;
         root_ = new_root;
+        (*inner)->latch_.unlock();
       }
     } else {
+      TERRIER_ASSERT(potential_changes.empty(), "Should not have any potential changes if we did not need to split!");
       InsertIntoNode(leaf, i, k, v);
+      leaf->latch_.unlock();
     }
 
-    TERRIER_ASSERT(IsBplusTree(), "End of insert should result in a valid B+ tree");
+#ifdef DEEP_DEBUG
+    TERRIER_ASSERT(IsBplusTree(), "Insert must return a valid B+ Tree");
+#endif
     return true;
   }
 };
@@ -1035,4 +1145,5 @@ class BPlusTree {
 #undef CHECK
 #undef CHECK_LT
 #undef CHECK_LE
+#undef DEEP_DEBUG
 }  // namespace terrier::storage::index
