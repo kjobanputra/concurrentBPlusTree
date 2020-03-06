@@ -825,7 +825,7 @@ class BPlusTree {
      * Releases the lock the iterator holds on its current key and immediately invalidates this iterator
      */
     void ReleaseLock() {
-      if(current_) {
+      if(current_ != nullptr) {
         current_->latch_.unlock_shared();
       }
       current_ = nullptr;
