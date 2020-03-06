@@ -127,7 +127,7 @@ class BPlusTree {
     OverflowNode *overflow_;
 
     bool Contains(KeyType k, const BPlusTree *parent) const {
-      for(int i = 0; i < this->filled_keys_; i++) {
+      for(uint32_t i = 0; i < this->filled_keys_; i++) {
         if(parent->KeyCmpEqual(this->keys_[i], k)) {
           return true;
         }
@@ -152,7 +152,7 @@ class BPlusTree {
 
       CHECK(allow_duplicates || overflow_ == nullptr);
 
-      for (int i = 1; i < this->filled_keys_; i++) {
+      for (uint32_t i = 1; i < this->filled_keys_; i++) {
         CHECK(parent->KeyCmpLess(this->keys_[i - 1], this->keys_[i]));
         CHECK(!parent->KeyCmpEqual(this->keys_[i - 1], this->keys_[i]));
       }
@@ -161,7 +161,7 @@ class BPlusTree {
         if(current->next_ != nullptr) {
           CHECK(current->filled_keys_ == OVERFLOW_SIZE);
         }
-        for(int i = 0; i < current->filled_keys_; i++) {
+        for(uint32_t i = 0; i < current->filled_keys_; i++) {
           CHECK(Contains(current->keys_[i], parent));
         }
       }
@@ -248,7 +248,7 @@ class BPlusTree {
       CHECK_LE(this->filled_keys_, NUM_CHILDREN);
 
       // Check to make sure that every child is a valid node
-      for (int i = 0; i < this->filled_keys_; i++) {
+      for (uint32_t i = 0; i < this->filled_keys_; i++) {
         if (leaf_children_) {
           CHECK(Leaf(i) != nullptr);
           CHECK(Leaf(i)->IsLeafNode(allow_duplicates, false, parent));
@@ -277,18 +277,18 @@ class BPlusTree {
       // Check to make sure 0'th key is never touched - only if in debug mode
       DEBUG_ONLY_RUN(
       char *empty_key = reinterpret_cast<char*>(&this->keys_[0]);
-      for(int i = 0; i < sizeof(KeyType); i++) {
+      for(uint32_t i = 0; i < sizeof(KeyType); i++) {
           CHECK(empty_key[i] == '\0');
       }
       );
 
       // Make sure guide posts are in sorted order with no dupes
-      for (int i = 2; i < this->filled_keys_; i++) {
+      for (uint32_t i = 2; i < this->filled_keys_; i++) {
         CHECK(parent->KeyCmpLess(this->keys_[i - 1], this->keys_[i]));
       }
 
       // Check to make sure that each child has keys that are in the correct range
-      for (int i = 1; i < this->filled_keys_; i++) {
+      for (uint32_t i = 1; i < this->filled_keys_; i++) {
         if (leaf_children_) {
           auto leaf = Leaf(i);
           CHECK(parent->KeyCmpLessEqual(this->keys_[i], leaf->keys_[0]));
@@ -333,7 +333,7 @@ class BPlusTree {
     size_t GetHeapUsage() {
       size_t usage = sizeof(InteriorNode);
 
-      for(int i = 0; i < this->filled_keys_; i++) {
+      for(uint32_t i = 0; i < this->filled_keys_; i++) {
         if(leaf_children_) {
           usage += Leaf(i)->GetHeapUsage();
         } else {
@@ -538,15 +538,15 @@ class BPlusTree {
 
     // These two variables represent where in from's overflow nodes we are reading from
     OverflowNode *read_overflow = from->overflow_;
-    int read_id = 0;
+    uint32_t read_id = 0;
 
     // These two variables represent where in from's overflow nodes we are writing to
     OverflowNode *write_overflow = from->overflow_;
-    int write_id = 0;
+    uint32_t write_id = 0;
 
     // These two variables represent where in to's overflow nodes we are writing to
     OverflowNode *to_overflow = nullptr;
-    int to_id = 0;
+    uint32_t to_id = 0;
 
     // Unlike in from, we might have to allocate new overflow leaves. This is where we should write the
     // pointer in order to ensure that the link is created - we do it this way to support lazy allocation
@@ -703,13 +703,13 @@ class BPlusTree {
     // which way you go down the tree
     std::queue<InteriorNode *> level;
     level.push(root_);
-    for (int i = 1; i < depth_; i++) {
+    for (uint32_t i = 1; i < depth_; i++) {
       std::queue<InteriorNode *> next_level;
       while (!level.empty()) {
         auto elem = level.front();
         level.pop();
         CHECK(!elem->leaf_children_);
-        for (int j = 0; j < elem->filled_keys_; j++) {
+        for (uint32_t j = 0; j < elem->filled_keys_; j++) {
           next_level.push(elem->Interior(j));
         }
       }
@@ -1187,7 +1187,7 @@ class BPlusTree {
     return true;
   }
 
-  size_t GetHeapUsage() {
+  size_t GetHeapUsage() const {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "GetHeapUsage mulsled on a valid B+ Tree");
 #endif
