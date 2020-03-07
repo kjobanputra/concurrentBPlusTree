@@ -1,7 +1,7 @@
 #pragma once
 
-#include <loggers/index_logger.h>
 #include <execution/sql/memory_pool.h>
+#include <loggers/index_logger.h>
 
 #include <functional>
 #include <queue>
@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "common/spin_latch.h"
-
 
 namespace terrier::storage::index {
 /**
