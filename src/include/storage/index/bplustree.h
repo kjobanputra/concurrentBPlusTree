@@ -5,7 +5,6 @@
 #include <stack>
 #include <utility>
 #include <vector>
-#include <tuple>
 
 #include "common/spin_latch.h"
 
@@ -510,7 +509,7 @@ class BPlusTree {
     while (leaf == nullptr) {
       // If we know we do not need to split (e.g. there are still enough open guide posts,
       // then we don't need to keep track of anything above us
-      if (insert_op && current->filled_keys_ < NUM_CHILDREN - 1) { //TODO: Think about if this can be done for delete
+      if (insert_op && current->filled_keys_ < NUM_CHILDREN - 1) {
         potential_changes.erase(potential_changes.begin(), potential_changes.end());
       }
       // However, the level below us may still split or merged, so we may still change. Keep track of that
@@ -752,10 +751,72 @@ class BPlusTree {
     TERRIER_ASSERT(IsBplusTree(), "End of insert should result in a valid B+ tree");
   }
 
-  // TODO: @kjobanputra: need to implement this
-  // TODO: replace the current root if root has only 1 child
-  void InteriorNodeMerge(std::vector<InteriorNode*> potential_changes, std::vector<int> indices) {
-    return;
+  // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
+  LeafNode *TraverseTrackWithSiblings(KeyType k, std::vector<GenericNode<ValueType> *> &potential_changes,
+                                      std::vector<uint32_t> &indices,
+                                      std::vector<GenericNode<ValueType> *> &siblings)  {
+    potential_changes.reserve(depth_);
+    indices.reserve(depth_);
+    siblings.reserve(depth_);
+
+    LeafNode *leaf = nullptr;
+    InteriorNode *current = root_;
+    InteriorNode *last_sibling = nullptr;
+    bool last_iteration = false;
+
+    // Keys at
+    uint32_t i = 0;
+
+    while (leaf == nullptr || last_iteration) {
+
+      // Dummy node to maintain that indices match up between the three vectors
+      if (current == root_ ) { siblings.push_back(nullptr); }
+
+      // Current level or deeper levels may need access to this node
+      potential_changes.push_back(current);
+
+      i = 0;
+      while (i < current->filled_keys_ && KeyCmpGreaterEqual(k, current->keys_[i])) { ++i; }
+
+      // Index in potential_changes.end() that will get you to next child
+      indices.push_back(i);
+
+      // This is the case where we know the current level will not need to merge. We don't need to keep track of the
+      // parents anymore. We preserve the last node since future levels could potentially need it.
+      if (current->filled_keys_ > MIN_CHILDREN) {
+        potential_changes.erase(potential_changes.begin(), potential_changes.end()-1);
+        indices.erase(indices.begin(), indices.end()-1);
+
+        // Note that the current level's siblings were added in the last iteration, unless if current == root_
+        siblings.erase(siblings.begin(), siblings.end()-1);
+      }
+
+      // Only add the right sibling (potential right merge/borrow node) if leftmost node
+      if (i == 0) {
+        siblings.push_back(current->values_[i+1]);
+      } else {
+        // Adding left sibling for potential left merge or borrow case otherwise
+        siblings.push_back(current->values_[i-1]);
+      }
+
+      if (!last_iteration) {
+        if (current->leaf_children_) {
+          leaf = current->Leaf(i);
+
+          // Want to get leaf in the vectors to make delete fully generic
+          last_iteration = true;
+          continue;
+        } else {
+          leaf = current->Interior(i);
+        }
+      }
+
+      // Termination of loop
+      if (last_iteration) last_iteration = false;
+
+    }
+
+    return leaf;
   }
 
   // TODO: @kjobanputra: see if any optimizations can be made here
@@ -774,7 +835,7 @@ class BPlusTree {
 
   void ShiftChildrenLeft(std::vector<InteriorNode *> potential_changes, std::vector<uint32_t> indices, KeyType old_key) {
 
-    InteriorNode* parent = potential_changes[potential_changes.size()-1];
+    InteriorNode* parent = potential_changes.back();
     // parent's parent is the dead leaf's old grandparent
     std::vector<InteriorNode *> new_potential_changes = potential_changes;
     new_potential_changes.pop_back();
@@ -794,13 +855,25 @@ class BPlusTree {
     }
   }
 
+  // TODO: replace the current root if root has only 1 child
+  bool GenericDelete(std::vector<InteriorNode *> potential_changes,
+                     std::vector<InteriorNode *> siblings, std::vector<uint32_t> indices) {
+
+  }
+
   // TODO: @kjobanputra may be able to generalize with grouping borrow from left and merge with right and vv
   // TODO: @kjobanputra: need to consider overflow nodes
-  bool Delete(KeyType k) {
+  // TODO: @kjobanputra: don't update parent keys in borrow cases
+  bool Delete(KeyType k, ValueType v) {
     TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
 
+
     LeafNode *leaf = nullptr;
-    auto [ potential_changes, indices ]= TraverseTrack(k, leaf, false);
+    std::vector<InteriorNode *> potential_changes;
+    std::vector<uint32_t> indices;
+    std::vector<GenericNode<ValueType> *> siblings;
+
+    leaf = TraverseTrackWithSiblings(k, potential_changes, indices, siblings);
 
     // i is the index of the key in the leaf
     uint32_t i = 0;
@@ -812,7 +885,9 @@ class BPlusTree {
     if (!KeyCmpEqual(k, leaf->keys_[i])) { return false; }
 
     // Checking to see if any other nodes need to be modified
-    if (leaf->filled_keys_ < MIN_CHILDREN+1) {
+    if (leaf->filled_keys_ <= MIN_CHILDREN) {
+      TERRIER_ASSERT(leaf->next_->filled_keys_ == MIN_CHILDREN,
+                     "Leaf has less than MIN_CHILDREN without deletion in right leaf merge.");
       if (leaf->prev_ != NULL) {
         // Case 1: Borrow from left node
         if (leaf->prev_->filled_keys_ > MIN_CHILDREN) {
@@ -828,7 +903,7 @@ class BPlusTree {
           Propagate(old_key, potential_changes, indices, reinterpret_cast<GenericNode<LeafNode *>>(leaf));
         } else {
           TERRIER_ASSERT(leaf->prev_->filled_keys_ == MIN_CHILDREN,
-              "Leaf has less than MIN_CHILDREN without deletion in left leaf merge.");
+                         "Leaf has less than MIN_CHILDREN without deletion in left leaf merge.");
           // Case 2: Leaf merge with left node
 
           // Move elements over to the left sibling
@@ -879,8 +954,6 @@ class BPlusTree {
 
         // Case 4: Leaf merge with right node
       } else {
-        TERRIER_ASSERT(leaf->next_->filled_keys_ == MIN_CHILDREN,
-            "Leaf has less than MIN_CHILDREN without deletion in right leaf merge.");
 
         // Make room for incoming keys
         uint32_t offset = leaf->filled_keys_-1;
@@ -927,6 +1000,8 @@ class BPlusTree {
 
     return true;
   }
+
+  bool Delete(KeyType k) { return false; }
 
 };
 
