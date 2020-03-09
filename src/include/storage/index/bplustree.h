@@ -1391,7 +1391,6 @@ class BPlusTree {
     return true;
   }
 
-  bool Delete(KeyType k) { return false; }
 
 };
 
