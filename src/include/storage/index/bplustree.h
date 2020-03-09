@@ -752,7 +752,7 @@ class BPlusTree {
   }
 
   // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
-  LeafNode *TraverseTrackWithSiblings(KeyType k, std::vector<GenericNode<ValueType> *> &potential_changes,
+  LeafNode *WithSiblings(KeyType k, std::vector<GenericNode<ValueType> *> &potential_changes,
                                       std::vector<uint32_t> &indices,
                                       std::vector<GenericNode<ValueType> *> &siblings)  {
     potential_changes.reserve(depth_);
@@ -858,7 +858,7 @@ class BPlusTree {
   // TODO: replace the current root if root has only 1 child
   bool GenericDelete(std::vector<InteriorNode *> potential_changes,
                      std::vector<InteriorNode *> siblings, std::vector<uint32_t> indices) {
-
+    return false;
   }
 
   // TODO: @kjobanputra may be able to generalize with grouping borrow from left and merge with right and vv
@@ -873,7 +873,7 @@ class BPlusTree {
     std::vector<uint32_t> indices;
     std::vector<GenericNode<ValueType> *> siblings;
 
-    leaf = TraverseTrackWithSiblings(k, potential_changes, indices, siblings);
+    leaf = WithSiblings(k, potential_changes, indices, siblings);
 
     // i is the index of the key in the leaf
     uint32_t i = 0;
