@@ -1142,7 +1142,7 @@ class BPlusTree {
   }
 
   // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
-  LeafNode *WithSiblings(KeyType k, std::vector<GenericNode<ValueType> *> &potential_changes,
+  LeafNode *TraverseTrackWithSiblings(KeyType k, std::vector<GenericNode<ValueType> *> &potential_changes,
                                       std::vector<uint32_t> &indices,
                                       std::vector<GenericNode<ValueType> *> &siblings) {
     potential_changes.reserve(depth_);
@@ -1263,7 +1263,7 @@ class BPlusTree {
     std::vector<uint32_t> indices;
     std::vector<GenericNode<ValueType> *> siblings;
 
-    leaf = WithSiblings(k, potential_changes, indices, siblings);
+    leaf = TraverseTrackWithSiblings(k, potential_changes, indices, siblings);
 
     // i is the index of the key in the leaf
     uint32_t i = 0;
@@ -1391,6 +1391,9 @@ class BPlusTree {
     return true;
   }
 
+  bool Delete(KeyType k) {
+    return false;
+  }
 
 };
 
