@@ -306,14 +306,10 @@ class BPlusTree {
         CHECK(prev == nullptr || parent->KeyCmpLessEqual(prev->keys_[prev->filled_keys_ - 1], Leaf(0)->keys_[0]));
 
         auto last_leaf = Leaf(this->filled_keys_ - 1);
-        TERRIER_ASSERT(next == nullptr || next->leaf_children_, "boop");
         CHECK(next == nullptr || next->leaf_children_);
         CHECK((next == nullptr && last_leaf->next_ == nullptr) ||
               (next != nullptr && last_leaf->next_ == next->Leaf(0)));
 
-        TERRIER_ASSERT(next == nullptr || parent->KeyCmpLessEqual(last_leaf->keys_[last_leaf->filled_keys_ - 1],
-                                                                  next->Leaf(0)->keys_[0]),
-                       "beep boop");
         CHECK(next == nullptr ||
               parent->KeyCmpLessEqual(last_leaf->keys_[last_leaf->filled_keys_ - 1], next->Leaf(0)->keys_[0]));
       } else {
