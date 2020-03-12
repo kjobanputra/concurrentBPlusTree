@@ -893,6 +893,8 @@ class BPlusTree {
      * @returns a reference to this iterator.
      */
     KeyIterator &operator--() {
+      TERRIER_ASSERT(current_ != nullptr, "-- called on an invalid iterator!");
+
       if (index_ == 0) {
         auto *prev = current_->prev_;
         if (prev) {
@@ -900,7 +902,11 @@ class BPlusTree {
         }
         current_->latch_.unlock_shared();
         current_ = prev;
-        index_ = current_->filled_keys_ - 1;
+        if(current_) {
+          index_ = current_->filled_keys_ - 1;
+        } else {
+          index_ = 0;
+        }
       } else {
         index_--;
       }
@@ -990,7 +996,7 @@ class BPlusTree {
    * @param key the Lower bound (inclusive) for the
    * @return the iterator
    */
-  KeyIterator begin(const KeyType &key) const {  // NOLINT for STL name compability
+  KeyIterator beginGE(const KeyType &key) const {  // NOLINT for STL name compability
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif
@@ -1035,6 +1041,53 @@ class BPlusTree {
     }
     leaf->latch_.unlock_shared();
     return {this, leaf->next_, 0};
+  }
+
+  KeyIterator beginLE(const KeyType &key) const {  // NOLINT for STL name compability
+#ifdef DEEP_DEBUG
+    TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
+#endif
+
+    InteriorNode *save = root_;
+    save->latch_.lock_shared();
+    while (save != root_) {
+      save->latch_.unlock_shared();
+      save = root_;
+      save->latch_.lock_shared();
+    }
+
+    InteriorNode *current = root_;
+    LeafNode *leaf = nullptr;
+
+    // Do a search for the right-most leaf with keys < this key
+    while (leaf == nullptr) {
+      uint32_t child = FindKey(current, key) - 1;
+      if (current->leaf_children_) {
+        leaf = current->Leaf(child);
+        leaf->latch_.lock_shared();
+        current->latch_.unlock_shared();
+        TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
+      } else {
+        auto *next = current->Interior(child);
+        next->latch_.lock_shared();
+        current->latch_.unlock_shared();
+        current = next;
+      }
+    }
+
+    // Find first key in this node >= this one
+    for (uint32_t index = 0; index < leaf->filled_keys_; index++) {
+      if (KeyCmpLess(key, leaf->keys_[index])) {
+        KeyIterator ret(this, leaf, index);
+        --ret;
+        return ret;
+      } else if(KeyCmpEqual(key, leaf->keys_[index])) {
+        return {this, leaf, index};
+      }
+    }
+
+    // Key does not exist in the tree
+    return {this, leaf, leaf->filled_keys_ - 1};
   }
 
   const KeyIterator end() const {  // NOLINT for STL name compability
@@ -1168,6 +1221,8 @@ class BPlusTree {
 #endif
     return true;
   }
+
+
 
   size_t GetHeapUsage() const {
 #ifdef DEEP_DEBUG
