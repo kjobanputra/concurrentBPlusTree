@@ -166,6 +166,31 @@ class IndexBenchmark : public benchmark::Fixture {
     txn_manager_->Commit(scan_txn, transaction::TransactionUtil::EmptyCallback, nullptr);
     return total_ns;
   }
+
+  uint64_t RunInsertWorkload() {
+    auto *const insert_key = index_->GetProjectedRowInitializer().InitializeRow(key_buffer_);
+    auto *const insert_txn = txn_manager_->BeginTransaction();
+
+    uint64_t total_ns = 0;
+    uint64_t elapsed_ns = 0;
+    for (uint32_t i = 0; i < table_size_; i++) {
+      auto *const insert_redo =
+          insert_txn->StageWrite(CatalogTestUtil::TEST_DB_OID, CatalogTestUtil::TEST_TABLE_OID, tuple_initializer_);
+      auto *const insert_tuple = insert_redo->Delta();
+      *reinterpret_cast<int32_t *>(insert_tuple->AccessForceNotNull(0)) = i;
+      const auto tuple_slot = sql_table_->Insert(common::ManagedPointer(insert_txn), insert_redo);
+      *reinterpret_cast<int32_t *>(insert_key->AccessForceNotNull(0)) = i;
+
+      // Ensure that insert action appropriately listed
+      {
+        common::ScopedTimer<std::chrono::nanoseconds> timer(&elapsed_ns);
+        index_->Insert(common::ManagedPointer(insert_txn), *insert_key, tuple_slot);
+      }
+      total_ns += elapsed_ns;
+    }
+
+    return total_ns;
+  }
 };
 
 // Determine required time to run key lookup with BwTree structure for index
@@ -184,6 +209,22 @@ BENCHMARK_DEFINE_F(IndexBenchmark, BwTreeIndexRandomScanKey)(benchmark::State &s
   state.SetItemsProcessed(state.iterations() * table_size_);
 }
 
+
+// Determine required time to run insert with BwTree structure for index
+// NOLINTNEXTLINE
+BENCHMARK_DEFINE_F(IndexBenchmark, BwTreeIndexInsert)(benchmark::State &state) {
+// Create index using BwTree and populate associated table
+// NOLINTNEXTLINE
+for (auto _ : state) {
+CreateIndex(storage::index::IndexType::BWTREE);
+// Run key lookup and record amount of time required in seconds
+const auto total_ns = RunInsertWorkload();
+state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+}
+// Determine total number of items processed
+state.SetItemsProcessed(state.iterations() * table_size_);
+}
+
 // Determine required time to run key lookup with HashMap structure for index
 // NOLINTNEXTLINE
 BENCHMARK_DEFINE_F(IndexBenchmark, HashIndexRandomScanKey)(benchmark::State &state) {
@@ -198,6 +239,22 @@ BENCHMARK_DEFINE_F(IndexBenchmark, HashIndexRandomScanKey)(benchmark::State &sta
   // Determine total number of items processed
   state.SetItemsProcessed(state.iterations() * table_size_);
 }
+
+// Determine required time to run insert with BwTree structure for index
+// NOLINTNEXTLINE
+BENCHMARK_DEFINE_F(IndexBenchmark, HashIndexInsert)(benchmark::State &state) {
+// Create index using BwTree and populate associated table
+// NOLINTNEXTLINE
+for (auto _ : state) {
+CreateIndex(storage::index::IndexType::HASHMAP);
+// Run key lookup and record amount of time required in seconds
+const auto total_ns = RunInsertWorkload();
+state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+}
+// Determine total number of items processed
+state.SetItemsProcessed(state.iterations() * table_size_);
+}
+
 
 // Determine required time to run key lookup with BwTree structure for index
 // NOLINTNEXTLINE
@@ -215,19 +272,48 @@ BENCHMARK_DEFINE_F(IndexBenchmark, BPlusTreeIndexRandomScanKey)(benchmark::State
   state.SetItemsProcessed(state.iterations() * table_size_);
 }
 
+
+
+// Determine required time to run insert with BwTree structure for index
+// NOLINTNEXTLINE
+BENCHMARK_DEFINE_F(IndexBenchmark, BPlusTreeIndexInsert)(benchmark::State &state) {
+// Create index using BwTree and populate associated table
+// NOLINTNEXTLINE
+for (auto _ : state) {
+CreateIndex(storage::index::IndexType::BPLUSTREE);
+// Run key lookup and record amount of time required in seconds
+const auto total_ns = RunInsertWorkload();
+state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+}
+// Determine total number of items processed
+state.SetItemsProcessed(state.iterations() * table_size_);
+}
+
+
 // ----------------------------------------------------------------------------
 // BENCHMARK REGISTRATION
 // ----------------------------------------------------------------------------
 // clang-format off
+/* For benchmarking we just need the BPlus tree stuff
 BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexRandomScanKey)
+    ->UseManualTime()
+    ->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexInsert)
     ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
 BENCHMARK_REGISTER_F(IndexBenchmark, HashIndexRandomScanKey)
     ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(IndexBenchmark, HashIndexInsert)
+  ->UseManualTime()
+  ->Unit(benchmark::kMillisecond);
+  */
 BENCHMARK_REGISTER_F(IndexBenchmark, BPlusTreeIndexRandomScanKey)
-->UseManualTime()
+  ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(IndexBenchmark, BPlusTreeIndexInsert)
+  ->UseManualTime()
+  ->Unit(benchmark::kMillisecond);
 // clang-format on
 
 }  // namespace terrier
