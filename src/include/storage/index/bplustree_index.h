@@ -39,9 +39,7 @@ class BPlusTreeIndex final : public Index {
     // FIXME(15-721 project2): invoke garbage collection on the underlying data structure
   }
 
-  size_t GetHeapUsage() const final {
-    return bplustree_->GetHeapUsage();
-  }
+  size_t GetHeapUsage() const final { return bplustree_->GetHeapUsage(); }
 
   bool Insert(const common::ManagedPointer<transaction::TransactionContext> txn, const ProjectedRow &tuple,
               const TupleSlot location) final {
