@@ -294,9 +294,10 @@ state.SetItemsProcessed(state.iterations() * table_size_);
 // BENCHMARK REGISTRATION
 // ----------------------------------------------------------------------------
 // clang-format off
-//BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexRandomScanKey)
-//    ->UseManualTime()
-//    ->Unit(benchmark::kMillisecond);
+/* For benchmarking we just need the BPlus tree stuff
+BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexRandomScanKey)
+    ->UseManualTime()
+    ->Unit(benchmark::kMillisecond);
 BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexInsert)
     ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
@@ -306,6 +307,7 @@ BENCHMARK_REGISTER_F(IndexBenchmark, HashIndexRandomScanKey)
 BENCHMARK_REGISTER_F(IndexBenchmark, HashIndexInsert)
   ->UseManualTime()
   ->Unit(benchmark::kMillisecond);
+  */
 BENCHMARK_REGISTER_F(IndexBenchmark, BPlusTreeIndexRandomScanKey)
   ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
