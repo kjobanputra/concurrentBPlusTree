@@ -184,7 +184,7 @@ class IndexBenchmark : public benchmark::Fixture {
       // Ensure that insert action appropriately listed
       {
         common::ScopedTimer<std::chrono::nanoseconds> timer(&elapsed_ns);
-        EXPECT_TRUE(index_->Insert(common::ManagedPointer(insert_txn), *insert_key, tuple_slot));
+        index_->Insert(common::ManagedPointer(insert_txn), *insert_key, tuple_slot);
       }
       total_ns += elapsed_ns;
     }
@@ -214,9 +214,9 @@ BENCHMARK_DEFINE_F(IndexBenchmark, BwTreeIndexRandomScanKey)(benchmark::State &s
 // NOLINTNEXTLINE
 BENCHMARK_DEFINE_F(IndexBenchmark, BwTreeIndexInsert)(benchmark::State &state) {
 // Create index using BwTree and populate associated table
-CreateIndex(storage::index::IndexType::BWTREE);
 // NOLINTNEXTLINE
 for (auto _ : state) {
+CreateIndex(storage::index::IndexType::BWTREE);
 // Run key lookup and record amount of time required in seconds
 const auto total_ns = RunInsertWorkload();
 state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
@@ -244,9 +244,9 @@ BENCHMARK_DEFINE_F(IndexBenchmark, HashIndexRandomScanKey)(benchmark::State &sta
 // NOLINTNEXTLINE
 BENCHMARK_DEFINE_F(IndexBenchmark, HashIndexInsert)(benchmark::State &state) {
 // Create index using BwTree and populate associated table
-CreateIndex(storage::index::IndexType::HASHMAP);
 // NOLINTNEXTLINE
 for (auto _ : state) {
+CreateIndex(storage::index::IndexType::HASHMAP);
 // Run key lookup and record amount of time required in seconds
 const auto total_ns = RunInsertWorkload();
 state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
@@ -278,9 +278,9 @@ BENCHMARK_DEFINE_F(IndexBenchmark, BPlusTreeIndexRandomScanKey)(benchmark::State
 // NOLINTNEXTLINE
 BENCHMARK_DEFINE_F(IndexBenchmark, BPlusTreeIndexInsert)(benchmark::State &state) {
 // Create index using BwTree and populate associated table
-CreateIndex(storage::index::IndexType::BPLUSTREE);
 // NOLINTNEXTLINE
 for (auto _ : state) {
+CreateIndex(storage::index::IndexType::BPLUSTREE);
 // Run key lookup and record amount of time required in seconds
 const auto total_ns = RunInsertWorkload();
 state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
@@ -294,9 +294,9 @@ state.SetItemsProcessed(state.iterations() * table_size_);
 // BENCHMARK REGISTRATION
 // ----------------------------------------------------------------------------
 // clang-format off
-BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexRandomScanKey)
-    ->UseManualTime()
-    ->Unit(benchmark::kMillisecond);
+//BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexRandomScanKey)
+//    ->UseManualTime()
+//    ->Unit(benchmark::kMillisecond);
 BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexInsert)
     ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
