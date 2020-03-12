@@ -479,15 +479,17 @@ class BPlusTree {
     while (leaf == nullptr) {
       // If we know we do not need to split (e.g. there are still open guide posts,
       // then we don't need to keep track of anything above us
-      if (current->filled_keys_ < NUM_CHILDREN) {
+      if (potential_changes != nullptr && current->filled_keys_ < NUM_CHILDREN) {
         for (const auto &interior : *potential_changes) {
-          interior->latch_.unlock();
+            interior->latch_.unlock();
         }
         potential_changes->erase(potential_changes->begin(), potential_changes->end());
       }
 
       // However, the level below us may still split, so we may still change. Keep track of that
-      potential_changes->push_back(current);
+      if(potential_changes != nullptr) {
+        potential_changes->push_back(current);
+      }
 
       uint32_t i = FindKey(current, k) - 1;
 
@@ -495,15 +497,24 @@ class BPlusTree {
       if (current->leaf_children_) {
         leaf = current->Leaf(i);
         leaf->latch_.lock();
+        if(potential_changes == nullptr) {
+          current->latch_.unlock_shared();
+        }
         TERRIER_ASSERT(leaf != nullptr, "Leaves should not be null!!");
       } else {
+        InteriorNode *prev = current;
         current = current->Interior(i);
-        current->latch_.lock();
+        if(potential_changes == nullptr) {
+          current->latch_.lock_shared();
+          prev->latch_.unlock_shared();
+        } else {
+          current->latch_.lock();
+        }
       }
     }
 
     // If the leaf definitely has enough room, then we don't need to split anything!
-    if (leaf->filled_keys_ < NUM_CHILDREN) {
+    if (potential_changes != nullptr && leaf->filled_keys_ < NUM_CHILDREN) {
       for (const auto &interior : *potential_changes) {
         interior->latch_.unlock();
       }
@@ -1101,20 +1112,37 @@ class BPlusTree {
     TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
 #endif
 
-    std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
-    potential_changes.reserve(depth_);
-
+    // Optimistically grab read latches on the way down
     InteriorNode *save = root_;
-    save->latch_.lock();
+    save->latch_.lock_shared();
     while (save != root_) {
-      save->latch_.unlock();
+      save->latch_.unlock_shared();
       save = root_;
-      save->latch_.lock();
+      save->latch_.lock_shared();
     }
 
-    LeafNode *leaf = TraverseTrack(root_, k, &potential_changes);
+    LeafNode *leaf = TraverseTrack(root_, k, nullptr);
 
     uint32_t i = FindKey(leaf, k);
+
+    std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
+    if((i == leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) && leaf->filled_keys_ == NUM_CHILDREN) {
+      leaf->latch_.unlock();
+      // We will need to split. guess optimism was not good enough :(
+      potential_changes.reserve(depth_);
+
+      save = root_;
+      save->latch_.lock();
+      while (save != root_) {
+        save->latch_.unlock();
+        save = root_;
+        save->latch_.lock();
+      }
+
+      leaf = TraverseTrack(root_, k, &potential_changes);
+
+      i = FindKey(leaf, k);
+    }
 
     // If duplicates are not allowed, do not insert duplicates!
     if (!allow_duplicates_ && i != leaf->filled_keys_ && KeyCmpEqual(k, leaf->keys_[i])) {
