@@ -56,6 +56,7 @@ class BPlusTreeIndex final : public Index {
     txn->RegisterAbortAction([=]() {
       // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
       const bool result = true;
+      (void) result;
 
       TERRIER_ASSERT(result, "Delete on the index failed.");
     });
