@@ -443,27 +443,39 @@ class BPlusTree {
   }
 
   /**
-   * Finds the first index i in node where node->keys_[i] <= k,
+   * Finds the first index i in node where node->keys_[i] >= k,
    * or node->filled_keys_ if such an index does not exist
    */
   uint32_t FindKey(const LeafNode *node, KeyType k) const {
-    uint32_t i = 0;
-    while (i < node->filled_keys_ && KeyCmpGreater(k, node->keys_[i])) {
-      ++i;
+    uint32_t lo = 0;
+    uint32_t hi = node->filled_keys_;
+    while (lo < hi) {
+      uint32_t mid = (lo + hi) / 2;
+      if (KeyCmpLessEqual(k, node->keys_[mid])) {
+        hi = mid;
+      } else {
+        lo = mid + 1;
+      }
     }
-    return i;
+    return lo;
   }
 
   /**
-   * Finds the first index i in node where node->keys_[i] < k,
+   * Finds the first index i in node where node->keys_[i] > k,
    * or node->filled_keys_ if such a node does not exist.
    */
   uint32_t FindKey(const InteriorNode *node, KeyType k) const {
-    uint32_t i = 1;
-    while (i < node->filled_keys_ && KeyCmpGreaterEqual(k, node->keys_[i])) {
-      ++i;
+    uint32_t lo = 1;
+    uint32_t hi = node->filled_keys_;
+    while (lo < hi) {
+      uint32_t mid = (lo + hi) / 2;
+      if (KeyCmpLess(k, node->keys_[mid])) {
+        hi = mid;
+      } else {
+        lo = mid + 1;
+      }
     }
-    return i;
+    return lo;
   }
 
   /**
@@ -1040,10 +1052,9 @@ class BPlusTree {
     }
 
     // Find first key in this node >= this one
-    for (uint32_t index = 0; index < leaf->filled_keys_; index++) {
-      if (KeyCmpLessEqual(key, leaf->keys_[index])) {
-        return {this, leaf, index};
-      }
+    uint32_t index = FindKey(leaf, key);
+    if (index < leaf->filled_keys_) {
+      return {this, leaf, index};
     }
 
     // Key exists in the next node over
@@ -1086,19 +1097,19 @@ class BPlusTree {
       }
     }
 
-    // Find first key in this node >= this one
-    for (uint32_t index = 0; index < leaf->filled_keys_; index++) {
-      if (KeyCmpLess(key, leaf->keys_[index])) {
+    // Find last key in this node <= this one
+    uint32_t index = FindKey(leaf, key);
+    if (index == leaf->filled_keys_ || !KeyCmpEqual(key, leaf->keys_[index])) {
+      // index should be to the left
+      if (index == 0) {
+        // Key exists in the leaf to the left
         KeyIterator ret(this, leaf, index);
         --ret;
         return ret;
-      } else if(KeyCmpEqual(key, leaf->keys_[index])) {
-        return {this, leaf, index};
       }
+      return {this, leaf, index - 1};
     }
-
-    // Key does not exist in the tree
-    return {this, leaf, leaf->filled_keys_ - 1};
+    return {this, leaf, index};
   }
 
   const KeyIterator end() const {  // NOLINT for STL name compability
