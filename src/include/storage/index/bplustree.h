@@ -1172,77 +1172,58 @@ class BPlusTree {
   }
 
   // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
-  template <typename Value>
-  LeafNode *TraverseTrackWithSiblings(KeyType k, std::vector<GenericNode<Value> *> &potential_changes,
+  LeafNode *TraverseTrackWithSiblings(InteriorNode *root,
+                                      KeyType k,
+                                      std::vector<InteriorNode *> &potential_changes,
                                       std::vector<uint32_t> &indices,
-                                      std::vector<GenericNode<Value> *> &siblings,
-                                      std::vector<SiblingType> &sibling_types) {
+                                      std::vector<InteriorNode *> &left_siblings,
+                                      std::vector<InteriorNode *> &right_siblings) {
     potential_changes.reserve(depth_);
     indices.reserve(depth_);
-    siblings.reserve(depth_);
-    sibling_types.reserve(depth_);
+    left_siblings.reserve(depth_);
+    right_siblings.reserve(depth_);
 
     LeafNode *leaf = nullptr;
-    GenericNode<Value> *current = reinterpret_cast<GenericNode<Value> *>(root_);
-    bool last_iteration = false;
+    InteriorNode *current = root;
+    InteriorNode *left = nullptr;
+    InteriorNode *right = nullptr;
     uint32_t i;
 
-    while (leaf == nullptr || last_iteration) {
-
-      // Dummy node to maintain that indices match up between the three vectors
-      if (current == reinterpret_cast<GenericNode<Value> *>(root_)) {
-        siblings.push_back(nullptr);
-        sibling_types.push_back(SiblingType::Neither);
-      }
-
-      // Current level or deeper levels may need access to this node
-      potential_changes.push_back(current);
-
-      if (last_iteration) {
-        TERRIER_ASSERT(leaf != nullptr, "TraverseTrackWithSiblings is not at leaf level");
-        i = FindKey(leaf, k);
-      } else {
-        i = FindKey(reinterpret_cast<InteriorNode *>(current), k);
+    while (leaf == nullptr) {
+      i = FindKey(current, k);
+      // This is the case where we know the current level will not need to merge. We don't need to keep track of the
+      // parents anymore. We preserve the last node since future levels could potentially need it.
+      if (current->filled_keys_ > MIN_CHILDREN) {
+        potential_changes.erase(potential_changes.begin(), potential_changes.end());
+        left_siblings.erase(left_siblings.begin(), left_siblings.end());
+        right_siblings.erase(right_siblings.begin(), right_siblings.end());
+        indices.erase(indices.begin(), indices.end());
       }
 
       // Index in potential_changes.end() that will get you to next child
       indices.push_back(i);
-
-      // This is the case where we know the current level will not need to merge. We don't need to keep track of the
-      // parents anymore. We preserve the last node since future levels could potentially need it.
-      if (current->filled_keys_ > MIN_CHILDREN) {
-        potential_changes.erase(potential_changes.begin(), potential_changes.end()-1);
-        indices.erase(indices.begin(), indices.end()-1);
-
-        // Note that the current level's siblings were added in the last iteration, unless if current == root_
-        siblings.erase(siblings.begin(), siblings.end()-1);
-        sibling_types.erase(sibling_types.begin(), sibling_types.end()-1);
-      }
+      left_siblings.push_back(left);
+      right_siblings.push_back(right);
+      potential_changes.push_back(current);
 
       // Only add the right sibling (potential right merge/borrow node) if leftmost node
-      if (i == 0) {
-        siblings.push_back(&current->values_[i+1]);
-        sibling_types.push_back(SiblingType::Right);
+      if (current->leaf_children_) {
+        leaf = current->Leaf(i);
       } else {
-        // Adding left sibling for potential left merge or borrow case otherwise
-        siblings.push_back(&current->values_[i-1]);
-        sibling_types.push_back(SiblingType::Left);
-      }
-
-      if (!last_iteration) {
-        if (current->leaf_children_) {
-          leaf = current->Leaf(i);
-
-          // Want to get leaf in the vectors to make delete fully generic
-          last_iteration = true;
-          continue;
-        } else {
-          current = current->Interior(i);
+        if(i == 0 && left != nullptr) {
+          left = left->Interior(left->filled_keys_ - 1);
+        } else if(i != 0) {
+          left = current->Interior(i - 1);
         }
-      }
 
-      // Termination of loop
-      if (last_iteration) last_iteration = false;
+        if(i == current->filled_keys_ - 1 && right != nullptr) {
+          right = right->Interior(0);
+        } else if (i != current->filled_keys_ - 1) {
+          right = current->Interior(i + 1);
+        }
+
+        current = current->Interior(i);
+      }
     }
 
     return leaf;
@@ -1468,20 +1449,73 @@ class BPlusTree {
     }
   }
 
-  template <typename Value>
-  bool TemplateDelete(KeyType k) {
-    LeafNode *leaf = nullptr;
-    std::vector<GenericNode<Value> *> potential_changes;
-    std::vector<uint32_t> indices;
-    std::vector<GenericNode<Value> *> siblings;
-    std::vector<SiblingType> sibling_types;
+  bool RemoveFromOverflow(OverflowNode *overflow, KeyType k, ValueType *v, ValueType *result) {
+    OverflowNode *current = overflow;
+    bool deleted = false;
+    uint32_t i = 0;
 
-    leaf = TraverseTrackWithSiblings(k, potential_changes, indices, siblings, sibling_types);
+    while(current != nullptr) {
+      for(i = 0; i < current->filled_keys_; i++) {
+        if(KeyCmpEqual(k, current->keys_[i]) && (v == nullptr || value_eq_obj_(*v, current->values_[i]))) {
+          *result = current->values_[i];
+          deleted = true;
+          break;
+        }
+      }
+      if(i < current->filled_keys_) {
+        break;
+      }
+      current = current->next_;
+    }
+
+    if(deleted) {
+      OverflowNode *prev = current;
+      i++;
+      while (current != nullptr) {
+        for (; i < current->filled_keys_; i++) {
+          current->values_[i - 1] = current->values_[i];
+        }
+
+        prev = current;
+        current = current->next_;
+        if (current != nullptr) {
+          prev->values_[prev->filled_keys_ - 1] = current->values_[0];
+          i = 1;
+        }
+      }
+
+      if (prev != nullptr) {
+        prev->filled_keys_--;
+      }
+    }
+
+    return deleted;
+  }
+
+
+  bool Delete(KeyType k, ValueType v) {
+    TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+    LeafNode *leaf = nullptr;
+    std::vector<InteriorNode *> potential_changes;
+    std::vector<uint32_t> indices;
+    std::vector<InteriorNode *> left_siblings;
+    std::vector<InteriorNode *> right_siblings;
+
+    leaf = TraverseTrackWithSiblings(k, potential_changes, indices, left_siblings, right_siblings);
     TERRIER_ASSERT(leaf == potential_changes.back(), "Leaf level is not retained in the delete vectors.");
 
-    uint32_t i = indices.back();
+    uint32_t i = FindKey(leaf, k);
+
     // Can't delete a key that doesn't exist in the tree
     if (!KeyCmpEqual(k, leaf->keys_[i])) { return false; }
+
+    if (allow_duplicates_) {
+      if(value_eq_obj_(v, leaf->values_[i])) {
+        
+      }
+    } else {
+
+    }
 
     bool leaf_bool = true;
     while (!potential_changes.empty()) {
@@ -1493,16 +1527,6 @@ class BPlusTree {
     TERRIER_ASSERT(indices.empty(), "Indices vector is not empty.");
     TERRIER_ASSERT(sibling_types.empty(), "Sibling_types vector is not empty.");
     TERRIER_ASSERT(IsBplusTree(), "Deleting a key from a valid B+tree should result in a valid B+tree.");
-    return true;
-  }
-
-  bool Delete(KeyType k) {
-    TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
-    return TemplateDelete(k);
-  }
-
-  // TODO: @kjobanputra: need to consider overflow nodes
-  bool Delete(KeyType k, ValueType v) {
     return true;
   }
 
