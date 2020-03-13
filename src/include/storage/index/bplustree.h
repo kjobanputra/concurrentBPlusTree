@@ -475,6 +475,8 @@ class BPlusTree {
    */
   LeafNode *TraverseTrack(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes) const {
     InteriorNode *current = root;
+    uint32_t max_depth = depth_;
+    uint32_t cur_depth = 1;
     LeafNode *leaf = nullptr;
     while (leaf == nullptr) {
       // If we know we do not need to split (e.g. there are still open guide posts,
@@ -494,7 +496,7 @@ class BPlusTree {
       uint32_t i = FindKey(current, k) - 1;
 
       // If we've reached the leaf level, break out!
-      if (current->leaf_children_) {
+      if (cur_depth == max_depth) {
         leaf = current->Leaf(i);
         leaf->latch_.lock();
         if(potential_changes == nullptr) {
@@ -511,6 +513,7 @@ class BPlusTree {
           current->latch_.lock();
         }
       }
+      cur_depth++;
     }
 
     // If the leaf definitely has enough room, then we don't need to split anything!
