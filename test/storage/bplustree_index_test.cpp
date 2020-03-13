@@ -1603,17 +1603,17 @@ auto *const scan_key_pr = default_index_->GetProjectedRowInitializer().Initializ
 
 auto *txn0 = txn_manager_->BeginTransaction();
 
-// txn 0 scans index for 15721 and gets a visible, correct result
-*reinterpret_cast<int32_t *>(scan_key_pr->AccessForceNotNull(0)) = 15721;
-default_index_->ScanKey(*txn0, *scan_key_pr, &results);
-EXPECT_EQ(results.size(), 1);
-EXPECT_EQ(tuple_slot, results[0]);
+  // txn 0 scans index for 15721 and gets a visible, correct result
+  *reinterpret_cast<int32_t *>(scan_key_pr->AccessForceNotNull(0)) = 15721;
+  default_index_->ScanKey(*txn0, *scan_key_pr, &results);
+  EXPECT_EQ(results.size(), 1);
+  EXPECT_EQ(tuple_slot, results[0]);
 
-// txn 0 deletes in the table and index
-txn0->StageDelete(CatalogTestUtil::TEST_DB_OID, CatalogTestUtil::TEST_TABLE_OID, results[0]);
-EXPECT_TRUE(sql_table_->Delete(common::ManagedPointer(txn0), results[0]));
-default_index_->Delete(common::ManagedPointer(txn0), *insert_key, results[0]);
-results.clear();
+  // txn 0 deletes in the table and index
+  txn0->StageDelete(CatalogTestUtil::TEST_DB_OID, CatalogTestUtil::TEST_TABLE_OID, results[0]);
+  EXPECT_TRUE(sql_table_->Delete(common::ManagedPointer(txn0), results[0]));
+  default_index_->Delete(common::ManagedPointer(txn0), *insert_key, results[0]);
+  results.clear();
 
 // txn 0 scans index for 15721 and gets no visible result
 *reinterpret_cast<int32_t *>(scan_key_pr->AccessForceNotNull(0)) = 15721;
@@ -1927,6 +1927,7 @@ EXPECT_EQ(tuple_slot, results[0]);
 results.clear();
 
 txn_manager_->Commit(txn2, transaction::TransactionUtil::EmptyCallback, nullptr);
+
 }
 
 }  // namespace terrier::storage::index

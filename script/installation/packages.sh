@@ -94,7 +94,7 @@ install_mac() {
 install_linux() {
   # Update apt-get.
   apt-get -y update
-  
+
   # IMPORTANT: If you change anything listed below, you must also change it in the Dockerfile
   # in the root directory of the repository!
   apt-get -y install \
