@@ -897,15 +897,13 @@ class BPlusTree {
 
       if (index_ == 0) {
         auto *prev = current_->prev_;
-        if (prev) {
+        if (prev != nullptr) {
           prev->latch_.lock_shared();
         }
         current_->latch_.unlock_shared();
         current_ = prev;
-        if(current_) {
+        if(current_ != nullptr) {
           index_ = current_->filled_keys_ - 1;
-        } else {
-          index_ = 0;
         }
       } else {
         index_--;
@@ -996,7 +994,7 @@ class BPlusTree {
    * @param key the Lower bound (inclusive) for the
    * @return the iterator
    */
-  KeyIterator beginGE(const KeyType &key) const {  // NOLINT for STL name compability
+  KeyIterator BeginGreaterEqual(const KeyType &key) const {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif
@@ -1043,7 +1041,7 @@ class BPlusTree {
     return {this, leaf->next_, 0};
   }
 
-  KeyIterator beginLE(const KeyType &key) const {  // NOLINT for STL name compability
+  KeyIterator BeginLessEqual(const KeyType &key) const {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif

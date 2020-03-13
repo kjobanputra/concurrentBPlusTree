@@ -129,7 +129,7 @@ class BPlusTreeIndex final : public Index {
     index_key.SetFromProjectedRow(key, metadata_, metadata_.GetSchema().GetColumns().size());
 
     // Perform lookup in BPlusTree
-    auto scan_itr = bplustree_->beginGE(index_key);
+    auto scan_itr = bplustree_->BeginGreaterEqual(index_key);
     auto end_itr = bplustree_->end();
 
     if (scan_itr != end_itr && bplustree_->KeyCmpEqual(scan_itr.Key(), index_key)) {
@@ -164,7 +164,7 @@ class BPlusTreeIndex final : public Index {
     if (low_key_exists) index_low_key.SetFromProjectedRow(*low_key, metadata_, num_attrs);
     if (high_key_exists) index_high_key.SetFromProjectedRow(*high_key, metadata_, num_attrs);
 
-    auto scan_itr = low_key_exists ? bplustree_->beginGE(index_low_key) : bplustree_->begin();
+    auto scan_itr = low_key_exists ? bplustree_->BeginGreaterEqual(index_low_key) : bplustree_->begin();
     auto end_itr = bplustree_->end();
 
     // Limit of 0 indicates "no limit"
@@ -192,7 +192,7 @@ class BPlusTreeIndex final : public Index {
     index_high_key.SetFromProjectedRow(high_key, metadata_, metadata_.GetSchema().GetColumns().size());
 
     // Perform lookup in BwTree
-    auto scan_itr = bplustree_->beginLE(index_high_key);
+    auto scan_itr = bplustree_->BeginLessEqual(index_high_key);
     auto end_itr = bplustree_->end();
     // Back up one element if we didn't match the high key
     if (scan_itr == end_itr || bplustree_->KeyCmpGreater(scan_itr.Key(), index_high_key)) --scan_itr;
@@ -223,7 +223,7 @@ class BPlusTreeIndex final : public Index {
 
     // Perform lookup in BwTree
 
-    auto scan_itr = bplustree_->beginLE(index_high_key);
+    auto scan_itr = bplustree_->BeginLessEqual(index_high_key);
     auto end_itr = bplustree_->end();
     // Back up one element if we didn't match the high key
     if (scan_itr == end_itr || bplustree_->KeyCmpGreater(scan_itr.Key(), index_high_key)) --scan_itr;
