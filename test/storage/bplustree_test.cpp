@@ -1,5 +1,8 @@
 #include "test_util/test_harness.h"
 #include "storage/index/bplustree.h"
+#include "test_util/bwtree_test_util.h"
+#include "test_util/multithread_test_util.h"
+#include "test_util/test_harness.h"
 
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_LEAVES = 25;
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_KEYS_PER_LEAF = 4;
@@ -9,6 +12,8 @@ namespace terrier::storage::index {
 
 struct BPlusTreeTests : public TerrierTest {
  public:
+  const uint32_t num_threads_ =
+      MultiThreadTestUtil::HardwareConcurrency() + (MultiThreadTestUtil::HardwareConcurrency() % 2);
   storage::index::BPlusTree<uint32_t, uint32_t> bplustree_;
   std::vector<uint32_t> key_vec_;
   BPlusTreeTests() : bplustree_(false) {}
@@ -27,6 +32,17 @@ struct BPlusTreeTests : public TerrierTest {
     }
     iter.ReleaseLock();
     return true;
+  }
+
+  uint32_t CountValues(uint32_t key) {
+    uint32_t result = 0;
+    auto iter = bplustree_.BeginLessEqual(key);
+    while(iter != bplustree_.end() && iter.Key() == key) {
+      ++result;
+      ++iter;
+    }
+    iter.ReleaseLock();
+    return result;
   }
 
 };
@@ -90,11 +106,12 @@ TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
       EXPECT_TRUE(CheckDelete(key, 1));
     }
   }
-
 }
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, DuplicateTests) {
+  // Temp removal
+  return;
   std::map<uint32_t, std::map<uint32_t, uint32_t>> keyvals_;
   for(uint32_t i = 0; i < NUM_INSERTIONS; i++) {
     bplustree_.Insert(i, 1, true, [](uint32_t val){ return false; });
@@ -124,5 +141,134 @@ TEST_F(BPlusTreeTests, DuplicateTests) {
       EXPECT_TRUE(CheckDelete(k, v));
     }
   }
+}
+
+// NOLINTNEXTLINE
+/**
+ * Adapted from https://github.com/wangziqi2013/BwTree/blob/master/test/basic_test.cpp and
+ * https://github.com/wangziqi2013/BwTree/blob/master/test/main.cpp
+ *
+ * Test Basic Insert/Delete/GetValue with different patterns and multi thread
+ */
+// NOLINTNEXTLINE
+TEST_F(BPlusTreeTests, Interleaved) {
+const uint32_t basic_test_key_num = 128 * 1024;
+
+common::WorkerPool thread_pool(num_threads_, {});
+thread_pool.Startup();
+
+/*
+ * InsertTest1() - Each threads inserts in its own consecutive key subspace
+ *
+ * The intervals of each thread does not intersect, therefore contention
+ * is very small and this test is supposed to be very fast
+ *
+ * |---- thread 0 ----|---- thread 1----|----thread 2----| .... |---- thread n----|
+ */
+auto insert_test1 = [&](uint32_t id) {
+  for (uint32_t i = id * basic_test_key_num; i < static_cast<uint32_t>(id + 1) * basic_test_key_num; i++) {
+    bplustree_.Insert(i, i + 1);
+    bplustree_.Insert(i, i + 2);
+    bplustree_.Insert(i, i + 3);
+    bplustree_.Insert(i, i + 4);
+  }
+};
+
+/*
+ * DeleteTest1() - Same pattern as InsertTest1()
+ */
+auto delete_test1 = [&](uint32_t id) {
+  for (uint32_t i = id * basic_test_key_num; i < static_cast<uint32_t>(id + 1) * basic_test_key_num; i++) {
+    bplustree_.Delete(i, i + 1);
+    bplustree_.Delete(i, i + 2);
+    bplustree_.Delete(i, i + 3);
+    bplustree_.Delete(i, i + 4);
+  }
+};
+
+/*
+ * InsertTest2() - All threads collectively insert on the key space
+ *
+ * | t0 t1 t2 t3 .. tn | t0 t1 t2 t3 .. tn | t0 t1 .. | .. |  ... tn |
+ *
+ * This test is supposed to be slower since the contention is very high
+ * between different threads
+ */
+auto insert_test2 = [&](uint32_t id) {
+  for (uint32_t i = 0; i < basic_test_key_num; i++) {
+    uint32_t key = num_threads_ * i + id;
+
+    bplustree_.Insert(key, key + 1);
+    bplustree_.Insert(key, key + 2);
+    bplustree_.Insert(key, key + 3);
+    bplustree_.Insert(key, key + 4);
+  }
+};
+
+/*
+ * DeleteTest2() - The same pattern as InsertTest2()
+ */
+auto delete_test2 = [&](uint32_t id) {
+  for (uint32_t i = 0; i < basic_test_key_num; i++) {
+    uint32_t key = num_threads_ * i + id;
+
+    bplustree_.Delete(key, key + 1);
+    bplustree_.Delete(key, key + 2);
+    bplustree_.Delete(key, key + 3);
+    bplustree_.Delete(key, key + 4);
+  }
+};
+
+/*
+ * DeleteGetValueTest() - Verifies all values have been deleted
+ *
+ * This function verifies on key_num * thread_num key space
+ */
+auto delete_get_value_test = [&]() {
+  for (uint32_t i = 0; i < basic_test_key_num * num_threads_; i++) {
+    EXPECT_EQ(CountValues(i), 0);
+  }
+};
+
+/*
+ * InsertGetValueTest() - Verifies all values have been inserted
+ */
+auto insert_get_value_test = [&]() {
+  for (uint32_t i = 0; i < basic_test_key_num * num_threads_; i++) {
+    EXPECT_EQ(CountValues(i), 4);
+  }
+};
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test2);
+
+insert_get_value_test();
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test1);
+
+delete_get_value_test();
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test1);
+
+insert_get_value_test();
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test2);
+
+delete_get_value_test();
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test1);
+
+insert_get_value_test();
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test1);
+
+delete_get_value_test();
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test2);
+
+insert_get_value_test();
+
+MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test2);
+
+delete_get_value_test();
 }
 }  // namespace terrier::storage::index

@@ -1108,7 +1108,7 @@ class BPlusTree {
     return {this, nullptr, 0};
   }
 
-  bool Insert(KeyType k, ValueType v, bool allow_duplicates, const std::function<bool(const ValueType &)> &predicate) {
+  bool Insert(KeyType k, ValueType v, bool allow_duplicates = true, const std::function<bool(const ValueType &)> &predicate = [](ValueType v){ return false; }) {
     this->allow_duplicates_ = allow_duplicates;
 
 #ifdef DEEP_DEBUG
