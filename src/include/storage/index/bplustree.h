@@ -276,8 +276,10 @@ class BPlusTree {
       }
 
       // Check to make sure 0'th key is never touched - only if in debug mode
+      /*
       DEBUG_ONLY_RUN(char *empty_key = reinterpret_cast<char *>(&this->keys_[0]);
                      for (uint32_t i = 0; i < sizeof(KeyType); i++) { CHECK_EQ(empty_key[i], '\0'); });
+                     */
 
       // Make sure guide posts are in sorted order with no dupes
       for (uint32_t i = 2; i < this->filled_keys_; i++) {
@@ -288,14 +290,17 @@ class BPlusTree {
       for (uint32_t i = 1; i < this->filled_keys_; i++) {
         if (leaf_children_) {
           auto leaf = Leaf(i);
+          auto prev_leaf = Leaf(i-1);
           CHECK(parent->KeyCmpLessEqual(this->keys_[i], leaf->keys_[0]));
-          CHECK((i == this->filled_keys_ - 1) ||
-                (parent->KeyCmpLessEqual(leaf->keys_[leaf->filled_keys_ - 1], this->keys_[i + 1])));
+          CHECK(parent->KeyCmpLessEqual(prev_leaf->keys_[prev_leaf->filled_keys_ - 1], this->keys_[i]));
         } else {
           auto interior = Interior(i);
-          CHECK(parent->KeyCmpLessEqual(this->keys_[i - 1], interior->keys_[1]));
-          CHECK((i == this->filled_keys_ - 1) ||
-                (parent->KeyCmpLessEqual(interior->keys_[interior->filled_keys_ - 1], this->keys_[i + 1])));
+          while(!interior->leaf_children_) {
+            interior = Interior(0);
+          }
+          auto prev_interior = Interior(i-1);
+          CHECK(parent->KeyCmpLessEqual(this->keys_[i], interior->Leaf(0)->keys_[0]));
+          CHECK(parent->KeyCmpLessEqual(prev_interior->keys_[prev_interior->filled_keys_ - 1], this->keys_[i]));
         }
       }
 
@@ -309,6 +314,8 @@ class BPlusTree {
 
         auto last_leaf = Leaf(this->filled_keys_ - 1);
         CHECK(next == nullptr || next->leaf_children_);
+        TERRIER_ASSERT((next == nullptr && last_leaf->next_ == nullptr) ||
+              (next != nullptr && last_leaf->next_ == next->Leaf(0)), "");
         CHECK((next == nullptr && last_leaf->next_ == nullptr) ||
               (next != nullptr && last_leaf->next_ == next->Leaf(0)));
 
@@ -1350,7 +1357,7 @@ class BPlusTree {
       if(size > MIN_CHILDREN) {
         // Borrow case
         KeyType k_insert = start == 0 ? right->keys_[0] : parent->keys_[index + 1];
-        parent->keys_[index + 1] = right->keys_[start + 1];
+        parent->keys_[index + 1] = right->keys_[1];
 
         InsertIntoNode(node, node->filled_keys_, k_insert, right->values_[0]);
         RemoveFromNode(right, 0);
@@ -1390,7 +1397,7 @@ class BPlusTree {
         // Borrow case
         InsertIntoNode(node, start, left->keys_[size - 1], left->values_[size - 1]);
         RemoveFromNode(left, size - 1);
-        parent->keys_[index - 1] = node->keys_[start];
+        parent->keys_[index] = node->keys_[start];
         TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
@@ -1457,7 +1464,7 @@ class BPlusTree {
     //At this point we are committed to deleting the key/value pair
     RemoveFromNode(leaf, i);
 
-    if(depth_ == 1 || leaf->filled_keys_ >= MIN_CHILDREN) {
+    if((depth_ == 1 && root_->filled_keys_ == 1) || leaf->filled_keys_ >= MIN_CHILDREN) {
       // No rebalancing needed
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
 
@@ -1472,8 +1479,12 @@ class BPlusTree {
     }
 
     TERRIER_ASSERT(preserved == leaf->prev_ || preserved == leaf->next_, "We always merge into leaf");
-    leaf->prev_->next_ = leaf->next_;
-    leaf->next_->prev_ = leaf->prev_;
+    if(leaf->prev_ != nullptr) {
+      leaf->prev_->next_ = leaf->next_;
+    }
+    if(leaf->next_ != nullptr) {
+      leaf->next_->prev_ = leaf->prev_;
+    }
 
     if(preserved == leaf->prev_) {
       i = indices.back();
@@ -1490,7 +1501,7 @@ class BPlusTree {
     InteriorNode *left;
     InteriorNode *right;
 
-    do {
+    while(potential_changes.size() > 1) {
       current = potential_changes.back();
       potential_changes.pop_back();
       left = left_siblings.back();
@@ -1502,16 +1513,16 @@ class BPlusTree {
 
       RemoveFromNode(current, i);
 
-      InteriorNode *preserved_interior =
-          reinterpret_cast<InteriorNode*>(Rebalance(current, left, right, 1, potential_changes.back(), indices.back()));
-      if(preserved_interior == nullptr) {
+      InteriorNode *preserved_interior = reinterpret_cast<InteriorNode *>(
+          Rebalance(current, left, right, 1, potential_changes.back(), indices.back()));
+      if (preserved_interior == nullptr) {
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
-        return true; // No further rebalancing needed!
+        return true;  // No further rebalancing needed!
       }
 
       TERRIER_ASSERT(preserved_interior == left || preserved_interior == right, "We always merge into leaf");
 
-      if(preserved_interior == left) {
+      if (preserved_interior == left) {
         i = indices.back();
         indices.pop_back();
       } else {
@@ -1521,7 +1532,7 @@ class BPlusTree {
         TERRIER_ASSERT(i < potential_changes.back()->filled_keys_, "i should always be a valid spot!");
       }
       InteriorNode::Delete(current);
-    } while(potential_changes.size() > 1);
+    }
 
     current = potential_changes.back();
     potential_changes.pop_back();
@@ -1535,10 +1546,7 @@ class BPlusTree {
 
     TERRIER_ASSERT(current == root_, "Only root can be less than half full at this point");
 
-    if(current->filled_keys_ == 1) {
-      // we need to rebalance the root! it's down to one entry :(
-      TERRIER_ASSERT(depth_ > 1, "If depth was 1 we should be done");
-
+    if(current->filled_keys_ == 1 && depth_ > 1) {
       --depth_;
       root_ = root_->Interior(0);
       InteriorNode::Delete(current);
