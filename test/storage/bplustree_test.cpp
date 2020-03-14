@@ -9,11 +9,11 @@ namespace terrier::storage::index {
 
 struct BPlusTreeTests : public TerrierTest {
  public:
-  storage::index::BPlusTree<uint32_t, uint32_t> *bplustree_;
+  storage::index::BPlusTree<uint32_t, uint32_t> bplustree_;
   std::vector<uint32_t> keyVec_;
-  BPlusTreeTests() : bplustree_(new BPlusTree<uint32_t, uint32_t>(false)) {}
+  BPlusTreeTests() : bplustree_(false) {}
   bool CheckDelete(uint32_t del_index) {
-    bool is_b_plus_tree = bplustree_->IsBplusTree();
+    bool is_b_plus_tree = bplustree_.IsBplusTree();
     /*
     for (auto it = keyVec_.begin(); it != keyVec_.end(); it++) {
       auto current = bplustree_->root_;
@@ -30,13 +30,13 @@ struct BPlusTreeTests : public TerrierTest {
 TEST_F(BPlusTreeTests, DeleteTest) {
   keyVec_.reserve(NUM_INSERTIONS);
   for (uint32_t i = 0; i < NUM_INSERTIONS; i++) {
-    bplustree_->Insert(i, 1, false, [](uint32_t val){ return false; });
+    bplustree_.Insert(i, 1, false, [](uint32_t val){ return false; });
     keyVec_.push_back(i);
   }
 
   while (!keyVec_.empty()) {
     uint32_t del_index = rand() % keyVec_.size();
-    bplustree_->Delete(keyVec_[del_index], 1);
+    bplustree_.Delete(keyVec_[del_index], 1);
     keyVec_.erase(keyVec_.begin()+del_index);
     EXPECT_TRUE(CheckDelete(del_index));
   }

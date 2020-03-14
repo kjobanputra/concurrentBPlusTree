@@ -21,7 +21,7 @@ namespace terrier::storage::index {
 #define CHECK(x)                                                         \
   do {                                                                   \
     if (!(x)) {                                                          \
-      INDEX_LOG_ERROR("Failed check (%s) on line: %d.\n", #x, __LINE__); \
+      printf("Failed check (%s) on line: %d.\n", #x, __LINE__); \
       return false;                                                      \
     }                                                                    \
   } while (0)
@@ -59,12 +59,12 @@ namespace terrier::storage::index {
  * Number of children an interior node is allowed to have, or
  * equivalently the number of keys a leaf node is allowed to store
  */
-constexpr uint32_t NUM_CHILDREN = 256;
+constexpr uint32_t NUM_CHILDREN = 5;
 
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 512;
+constexpr uint32_t OVERFLOW_SIZE = 5;
 
 /**
  * Minimum number of children an interior node is allowed to have
@@ -190,7 +190,7 @@ class BPlusTree {
       return node;
     }
 
-    static void Delete(LeafNode *elem) { mem_pool.Deallocate(elem, sizeof(LeafNode)); }
+    static void Delete(LeafNode *elem) { mem_pool.Deallocate(elem, sizeof(class LeafNode)); }
   };
 
   class InteriorNode;
@@ -341,13 +341,13 @@ class BPlusTree {
     friend class BPlusTree;
 
     static InteriorNode *CreateNew() {
-      auto *node = reinterpret_cast<InteriorNode *>(mem_pool.Allocate(sizeof(class LeafNode), true));
+      auto *node = reinterpret_cast<InteriorNode *>(mem_pool.Allocate(sizeof(class InteriorNode), true));
       // Initialize the shared mutex
       new (&node->latch_) std::shared_mutex();
       return node;
     }
 
-    static void Delete(InteriorNode *elem) { mem_pool.Deallocate(elem, sizeof(InteriorNode)); }
+    static void Delete(InteriorNode *elem) { mem_pool.Deallocate(elem, sizeof(class InteriorNode)); }
   };
 
   InteriorNode *root_;
@@ -662,7 +662,10 @@ class BPlusTree {
     root_ = InteriorNode::CreateNew();
     root_->leaf_children_ = true;
     root_->filled_keys_ = 1;
-    root_->Leaf(0) = LeafNode::CreateNew();
+    TERRIER_ASSERT(root_->leaf_children_, "asd");
+    auto temp = LeafNode::CreateNew();
+    TERRIER_ASSERT(root_->leaf_children_, "asd");
+    root_->Leaf(0) = temp;
   }
 
   /**
@@ -1341,49 +1344,55 @@ class BPlusTree {
                                 uint32_t index) {
     TERRIER_ASSERT(node->filled_keys_ < MIN_CHILDREN, "Rebalance should be called on an unbalanced node!");
 
-    if(index == 1) { // 1 is the minimum index
+    if(index == 0) { // 1 is the minimum index
       TERRIER_ASSERT(right != nullptr, "Can't have an empty right if we're deleting at index 0!");
       uint32_t size = right->filled_keys_;
-      if(size > NUM_CHILDREN) {
+      if(size > MIN_CHILDREN) {
         // Borrow case
-        KeyType k_insert = start == 0 ? right->keys_[0] : parent->keys_[index];
-        parent->keys_[index] = right->keys_[start + 1];
+        KeyType k_insert = start == 0 ? right->keys_[0] : parent->keys_[index + 1];
+        parent->keys_[index + 1] = right->keys_[start + 1];
 
         InsertIntoNode(node, node->filled_keys_, k_insert, right->values_[0]);
         RemoveFromNode(right, 0);
+        TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+        TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
       } else {
         // Merge case
-        TERRIER_ASSERT(size >= node->filled_keys_, "This should be true...");
+        TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         // NB: using int64_t here in order to allow for natural semantics for a decreasing for loop
         for(int64_t i = right->filled_keys_ - 1; i >= 0; i--) {
-          right->keys_[i + size] = right->keys_[i];
-          right->values_[i + size] = right->values_[i];
+          right->keys_[i + node->filled_keys_] = right->keys_[i];
+          right->values_[i + node->filled_keys_] = right->values_[i];
         }
 
         if(start == 1) {
-          right->keys_[size] = parent->keys_[index];
+          right->keys_[node->filled_keys_] = parent->keys_[index + 1];
         }
-        right->filled_keys_ += size;
+        right->filled_keys_ += node->filled_keys_;
+        TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
 
-        for(uint32_t i = 0; i < size; i++) {
+        for(uint32_t i = 0; i < node->filled_keys_; i++) {
           right->keys_[i] = node->keys_[i];
           right->values_[i] = node->values_[i];
-          right->filled_keys_++;
         }
 
         // Cut the middleman out
         parent->values_[index].as_interior_ = reinterpret_cast<InteriorNode*>(right);
+        TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+        TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return right;
       }
     } else {
       TERRIER_ASSERT(left != nullptr, "Can't have an empty left if we're not deleting at index 0!");
       uint32_t size = left->filled_keys_;
-      if(size > NUM_CHILDREN) {
+      if(size > MIN_CHILDREN) {
         // Borrow case
         InsertIntoNode(node, start, left->keys_[size - 1], left->values_[size - 1]);
         RemoveFromNode(left, size - 1);
         parent->keys_[index - 1] = node->keys_[start];
+        TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+        TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
       } else {
         // Merge Case
@@ -1398,6 +1407,8 @@ class BPlusTree {
           left->keys_[orig_size] = parent->keys_[index];
         }
 
+        TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+        TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return left;
       }
     }
@@ -1416,7 +1427,10 @@ class BPlusTree {
     uint32_t i = FindKey(leaf, k);
 
     // Can't delete a key that doesn't exist in the tree
-    if (!KeyCmpEqual(k, leaf->keys_[i])) { return false; }
+    if (!KeyCmpEqual(k, leaf->keys_[i])) {
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+      return false;
+    }
 
     if (allow_duplicates_) {
       if(value_eq_obj_(v, leaf->values_[i])) {
@@ -1424,36 +1438,42 @@ class BPlusTree {
         if(RemoveFromOverflow(leaf->overflow_, k, nullptr, &newVal)) {
           // We found a matching key/value pair!
           leaf->values_[i] = newVal;
+          TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
           return true;
         }
         // We did not find a matching key/value pair so we must fully delete this version
       } else {
         ValueType ignore;
         // Try to remove it from the overflow node.
-        return RemoveFromOverflow(leaf->overflow_, k, &leaf->values_[i], &ignore);
+        bool result = RemoveFromOverflow(leaf->overflow_, k, &leaf->values_[i], &ignore);
+        TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+        return result;
       }
     } else if(!value_eq_obj_(v, leaf->values_[i])) {
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
       return false; // Can't delete a key that doesn't match the value :(
     }
 
     //At this point we are committed to deleting the key/value pair
     RemoveFromNode(leaf, i);
 
-    if(depth_ == 1) {
+    if(depth_ == 1 || leaf->filled_keys_ >= MIN_CHILDREN) {
       // No rebalancing needed
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+
       return true;
     }
 
     LeafNode *preserved =
         reinterpret_cast<LeafNode*>(Rebalance(leaf, leaf->prev_, leaf->next_, 0, potential_changes.back(), indices.back()));
     if(preserved == nullptr) {
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
       return true; // No further rebalancing needed
     }
 
     TERRIER_ASSERT(preserved == leaf->prev_ || preserved == leaf->next_, "We always merge into leaf");
     leaf->prev_->next_ = leaf->next_;
     leaf->next_->prev_ = leaf->prev_;
-
 
     if(preserved == leaf->prev_) {
       i = indices.back();
@@ -1485,6 +1505,7 @@ class BPlusTree {
       InteriorNode *preserved_interior =
           reinterpret_cast<InteriorNode*>(Rebalance(current, left, right, 1, potential_changes.back(), indices.back()));
       if(preserved_interior == nullptr) {
+        TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
         return true; // No further rebalancing needed!
       }
 
@@ -1507,7 +1528,8 @@ class BPlusTree {
     TERRIER_ASSERT(potential_changes.empty(), "Should be done");
     RemoveFromNode(current, i);
 
-    if(current->filled_keys_ >= NUM_CHILDREN) {
+    if(current->filled_keys_ >= MIN_CHILDREN) {
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
       return true;
     }
 
@@ -1522,6 +1544,7 @@ class BPlusTree {
       InteriorNode::Delete(current);
     }
 
+    TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
     return true;
   }
 
