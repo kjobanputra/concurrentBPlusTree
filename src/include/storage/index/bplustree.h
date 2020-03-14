@@ -1295,26 +1295,34 @@ class BPlusTree {
       uint32_t size = right->filled_keys_;
       if(size > NUM_CHILDREN) {
         // Borrow case
-        InsertIntoNode(node, node->filled_keys_, right->keys_[start], right->values_[start]);
-        RemoveFromNode(right, start);
-        parent->keys_[index] = right->keys_[start];
+        KeyType k_insert = start == 0 ? right->keys_[0] : parent->keys_[index];
+        parent->keys_[index] = right->keys_[start + 1];
+
+        InsertIntoNode(node, node->filled_keys_, k_insert, right->values_[0]);
+        RemoveFromNode(right, 0);
         return nullptr;
       } else {
         // Merge case
         TERRIER_ASSERT(size >= node->filled_keys_, "This should be true...");
         // NB: using int64_t here in order to allow for natural semantics for a decreasing for loop
-        for(int64_t i = right->filled_keys_ - 1; i >= start; i--) {
+        for(int64_t i = right->filled_keys_ - 1; i >= 0; i--) {
           right->keys_[i + size] = right->keys_[i];
           right->values_[i + size] = right->values_[i];
         }
 
+        if(start == 1) {
+          right->keys_[size] = parent->keys_[index];
+        }
         right->filled_keys_ += size;
 
-        for(uint32_t i = start; i < size; i++) {
+        for(uint32_t i = 0; i < size; i++) {
           right->keys_[i] = node->keys_[i];
           right->values_[i] = node->values_[i];
           right->filled_keys_++;
         }
+
+        // Cut the middleman out
+        parent->values_[index] = right;
         return right;
       }
     } else {
@@ -1327,11 +1335,17 @@ class BPlusTree {
         parent->keys_[index - 1] = node->keys_[start];
       } else {
         // Merge Case
-        for(uint32_t i = start; i < node->filled_keys_; i++) {
+        uint32_t orig_size = left->filled_keys_;
+        for(uint32_t i = 0; i < node->filled_keys_; i++) {
           left->keys_[left->filled_keys_] = node->keys_[i];
           left->values_[left->filled_keys_] = node->values_[i];
           left->filled_keys_++;
         }
+
+        if(start == 1) {
+          left->keys_[orig_size] = parent->keys_[index];
+        }
+
         return left;
       }
     }
