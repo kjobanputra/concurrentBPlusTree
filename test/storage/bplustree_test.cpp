@@ -3,7 +3,7 @@
 
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_LEAVES = 25;
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_KEYS_PER_LEAF = 4;
-constexpr uint32_t NUM_INSERTIONS = 30; // NUM_LEAVES*NUM_KEYS_PER_LEAF;
+constexpr uint32_t NUM_INSERTIONS = 100; // NUM_LEAVES*NUM_KEYS_PER_LEAF;
 
 namespace terrier::storage::index {
 

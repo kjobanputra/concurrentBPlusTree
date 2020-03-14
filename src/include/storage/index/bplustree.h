@@ -296,7 +296,7 @@ class BPlusTree {
         } else {
           auto interior = Interior(i);
           while(!interior->leaf_children_) {
-            interior = Interior(0);
+            interior = interior->Interior(0);
           }
           auto prev_interior = Interior(i-1);
           CHECK(parent->KeyCmpLessEqual(this->keys_[i], interior->Leaf(0)->keys_[0]));
