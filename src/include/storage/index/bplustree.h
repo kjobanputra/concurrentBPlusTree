@@ -59,12 +59,12 @@ namespace terrier::storage::index {
  * Number of children an interior node is allowed to have, or
  * equivalently the number of keys a leaf node is allowed to store
  */
-constexpr uint32_t NUM_CHILDREN = 5;
+constexpr uint32_t NUM_CHILDREN = 256;
 
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 5;
+constexpr uint32_t OVERFLOW_SIZE = 512;
 
 /**
  * Minimum number of children an interior node is allowed to have
@@ -895,14 +895,18 @@ class BPlusTree {
      * @returns a reference to this iterator.
      */
     KeyIterator &operator--() {
+      TERRIER_ASSERT(current_ != nullptr, "-- called on an invalid iterator!");
+
       if (index_ == 0) {
         auto *prev = current_->prev_;
-        if (prev) {
+        if (prev != nullptr) {
           prev->latch_.lock_shared();
         }
         current_->latch_.unlock_shared();
         current_ = prev;
-        index_ = current_->filled_keys_ - 1;
+        if(current_ != nullptr) {
+          index_ = current_->filled_keys_ - 1;
+        }
       } else {
         index_--;
       }
@@ -992,7 +996,7 @@ class BPlusTree {
    * @param key the Lower bound (inclusive) for the
    * @return the iterator
    */
-  KeyIterator begin(const KeyType &key) const {  // NOLINT for STL name compability
+  KeyIterator BeginGreaterEqual(const KeyType &key) const {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
 #endif
@@ -1037,6 +1041,53 @@ class BPlusTree {
     }
     leaf->latch_.unlock_shared();
     return {this, leaf->next_, 0};
+  }
+
+  KeyIterator BeginLessEqual(const KeyType &key) const {
+#ifdef DEEP_DEBUG
+    TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
+#endif
+
+    InteriorNode *save = root_;
+    save->latch_.lock_shared();
+    while (save != root_) {
+      save->latch_.unlock_shared();
+      save = root_;
+      save->latch_.lock_shared();
+    }
+
+    InteriorNode *current = root_;
+    LeafNode *leaf = nullptr;
+
+    // Do a search for the right-most leaf with keys < this key
+    while (leaf == nullptr) {
+      uint32_t child = FindKey(current, key) - 1;
+      if (current->leaf_children_) {
+        leaf = current->Leaf(child);
+        leaf->latch_.lock_shared();
+        current->latch_.unlock_shared();
+        TERRIER_ASSERT(leaf != nullptr, "Leaf should be reached");
+      } else {
+        auto *next = current->Interior(child);
+        next->latch_.lock_shared();
+        current->latch_.unlock_shared();
+        current = next;
+      }
+    }
+
+    // Find first key in this node >= this one
+    for (uint32_t index = 0; index < leaf->filled_keys_; index++) {
+      if (KeyCmpLess(key, leaf->keys_[index])) {
+        KeyIterator ret(this, leaf, index);
+        --ret;
+        return ret;
+      } else if(KeyCmpEqual(key, leaf->keys_[index])) {
+        return {this, leaf, index};
+      }
+    }
+
+    // Key does not exist in the tree
+    return {this, leaf, leaf->filled_keys_ - 1};
   }
 
   const KeyIterator end() const {  // NOLINT for STL name compability
