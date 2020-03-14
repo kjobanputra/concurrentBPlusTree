@@ -1190,7 +1190,6 @@ class BPlusTree {
     uint32_t i;
 
     while (leaf == nullptr) {
-      i = FindKey(current, k);
       // This is the case where we know the current level will not need to merge. We don't need to keep track of the
       // parents anymore. We preserve the last node since future levels could potentially need it.
       if (current->filled_keys_ > MIN_CHILDREN) {
@@ -1201,6 +1200,7 @@ class BPlusTree {
       }
 
       // Index in potential_changes.end() that will get you to next child
+      i = FindKey(current, k) - 1;
       indices.push_back(i);
       left_siblings.push_back(left);
       right_siblings.push_back(right);
@@ -1372,7 +1372,7 @@ class BPlusTree {
   // TODO: OPTIMIZATION explore just doing merges and no borrowing
   // TODO: replace the current root if root has only 1 child
   template <typename Value>
-  void GenericDelete(std::vector<GenericNode<Value> *> potential_changes,
+  void GenericDeleteold(std::vector<GenericNode<Value> *> potential_changes,
                      std::vector<GenericNode<Value> *> siblings, std::vector<uint32_t> indices,
                      std::vector<SiblingType> sibling_types, bool leaf) {
     GenericNode<Value> *current = potential_changes.back();
@@ -1492,6 +1492,75 @@ class BPlusTree {
     return deleted;
   }
 
+  template <typename Value>
+  void RemoveFromNode(GenericNode<Value> *node, uint32_t index) {
+    for(uint32_t j = index + 1; j < node->filled_keys_; j++) {
+      node->keys_[j - 1] = node->keys_[j];
+      node->values_[j - 1] = node->values_[j];
+    }
+    node->filled_keys_--;
+  }
+
+  template <typename Value>
+  void MergeNodes(GenericNode<Value> *left, GenericNode<Value> *right) {
+    TERRIER_ASSERT(left->filled_keys_ < NUM_CHILDREN && right->filled_keys_ < NUM_CHILDREN, "Can't have too many keys!");
+  }
+
+  template <typename Value>
+  GenericNode<Value> *Rebalance(GenericNode<Value> *node,
+                                GenericNode<Value> *left,
+                                GenericNode<Value> *right,
+                                uint32_t start,
+                                InteriorNode *parent,
+                                uint32_t index) {
+    TERRIER_ASSERT(node->filled_keys_ < MIN_CHILDREN, "Rebalance should be called on an unbalanced node!");
+
+    if(index == 1) { // 1 is the minimum index
+      TERRIER_ASSERT(right != nullptr, "Can't have an empty right if we're deleting at index 0!");
+      uint32_t size = right->filled_keys_;
+      if(size > NUM_CHILDREN) {
+        // Borrow case
+        InsertIntoNode(node, node->filled_keys_, right->keys_[start], right->values_[start]);
+        RemoveFromNode(right, start);
+        parent->keys_[index] = right->keys_[start];
+        return nullptr;
+      } else {
+        // Merge case
+        TERRIER_ASSERT(size >= node->filled_keys_, "This should be true...");
+        // NB: using int64_t here in order to allow for natural semantics for a decreasing for loop
+        for(int64_t i = right->filled_keys_ - 1; i >= start; i--) {
+          right->keys_[i + size] = right->keys_[i];
+          right->values_[i + size] = right->values_[i];
+        }
+
+        right->filled_keys_ += size;
+
+        for(uint32_t i = start; i < size; i++) {
+          right->keys_[i] = node->keys_[i];
+          right->values_[i] = node->values_[i];
+          right->filled_keys_++;
+        }
+        return right;
+      }
+    } else {
+      TERRIER_ASSERT(left != nullptr, "Can't have an empty left if we're not deleting at index 0!");
+      uint32_t size = left->filled_keys_;
+      if(size > NUM_CHILDREN) {
+        // Borrow case
+        InsertIntoNode(node, start, left->keys_[size - 1], left->values_[size - 1]);
+        RemoveFromNode(left, size - 1);
+        parent->keys_[index - 1] = node->keys_[start];
+      } else {
+        // Merge Case
+        for(uint32_t i = start; i < node->filled_keys_; i++) {
+          left->keys_[left->filled_keys_] = node->keys_[i];
+          left->values_[left->filled_keys_] = node->values_[i];
+          left->filled_keys_++;
+        }
+        return left;
+      }
+    }
+  }
 
   bool Delete(KeyType k, ValueType v) {
     TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
@@ -1511,22 +1580,106 @@ class BPlusTree {
 
     if (allow_duplicates_) {
       if(value_eq_obj_(v, leaf->values_[i])) {
-        
+        ValueType newVal;
+        if(RemoveFromOverflow(leaf->overflow_, k, nullptr, &newVal)) {
+          // We found a matching key/value pair!
+          leaf->values_[i] = newVal;
+          return true;
+        }
+        // We did not find a matching key/value pair so we must fully delete this version
+      } else {
+        ValueType ignore;
+        // Try to remove it from the overflow node.
+        return RemoveFromOverflow(leaf->overflow_, k, &leaf->values[i], &ignore);
       }
+    } else if(!value_eq_obj_(v, leaf->values[i])) {
+      return false; // Can't delete a key that doesn't match the value :(
+    }
+
+    //At this point we are committed to deleting the key/value pair
+    RemoveFromNode(leaf, i);
+
+    if(depth_ == 1) {
+      // No rebalancing needed
+      return true;
+    }
+
+    LeafNode *preserved = Rebalance(leaf, leaf->left, leaf->right, 0, potential_changes.back(), indices.back());
+    if(preserved == nullptr) {
+      return true; // No further rebalancing needed
+    }
+
+    TERRIER_ASSERT(preserved == leaf->left || preserved == leaf->right, "We always merge into leaf");
+    leaf->left_->right_ = leaf->right_;
+    leaf->right_->left_ = leaf->left_;
+
+
+    if(preserved == leaf->left) {
+      i = indices.back();
+      indices.pop_back();
     } else {
+      TERRIER_ASSERT(preserved == leaf->right, "Only other option");
+      i = indices.back() + 1;
+      indices.pop_back();
+      TERRIER_ASSERT(i < potential_changes.back()->filled_keys_, "i should always be a valid spot!");
+    }
+    InteriorNode::Delete(leaf);
 
+    InteriorNode *current;
+    InteriorNode *left;
+    InteriorNode *right;
+
+    do {
+      current = potential_changes.back();
+      potential_changes.pop_back();
+      left = left_siblings.back();
+      left_siblings.pop_back();
+      right = right_siblings.back();
+      right_siblings.pop_back();
+
+      TERRIER_ASSERT(left != nullptr || right != nullptr, "Should not have reached the root!");
+
+      RemoveFromNode(current, i);
+
+      InteriorNode *preserved_interior = Rebalance(current, left, right, 1, potential_changes.back(), indices.back());
+      if(preserved_interior == nullptr) {
+        return true; // No further rebalancing needed!
+      }
+
+      TERRIER_ASSERT(preserved_interior == leaf->left || preserved_interior == leaf->right, "We always merge into leaf");
+
+      if(preserved_interior == left) {
+        i = indices.back();
+        indices.pop_back();
+      } else {
+        TERRIER_ASSERT(preserved_interior == right, "Only other option");
+        i = indices.back() + 1;
+        indices.pop_back();
+        TERRIER_ASSERT(i < potential_changes.back()->filled_keys_, "i should always be a valid spot!");
+      }
+      InteriorNode::Delete(current);
+    } while(potential_changes.size() > 1);
+
+    current = potential_changes.back();
+    potential_changes.pop_back();
+    TERRIER_ASSERT(potential_changes.empty(), "Should be done");
+    RemoveFromNode(current, i);
+
+    if(current->filled_keys_ >= NUM_CHILDREN) {
+      return true;
     }
 
-    bool leaf_bool = true;
-    while (!potential_changes.empty()) {
-      GenericDelete(potential_changes, siblings, indices, sibling_types, leaf_bool);
-      leaf_bool = false;
+    TERRIER_ASSERT(current == root_, "Only root can be less than half full at this point");
+
+    if(current->filled_keys_ == 1) {
+      // we need to rebalance the root! it's down to one entry :(
+      TERRIER_ASSERT(depth_ > 1, "If depth was 1 we should be done");
+
+      --depth_;
+      root_ = root_->Interior(0);
+      InteriorNode::Delete(current);
     }
 
-    TERRIER_ASSERT(siblings.empty(), "Siblings vector is not empty.");
-    TERRIER_ASSERT(indices.empty(), "Indices vector is not empty.");
-    TERRIER_ASSERT(sibling_types.empty(), "Sibling_types vector is not empty.");
-    TERRIER_ASSERT(IsBplusTree(), "Deleting a key from a valid B+tree should result in a valid B+tree.");
     return true;
   }
 
