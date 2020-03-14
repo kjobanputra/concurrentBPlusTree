@@ -119,7 +119,7 @@ install_linux() {
       libsqlite3-dev \
       ant \
       wget
-
+      
   # IMPORTANT: Ubuntu 18.04 does not have libpqxx-6.2 available. So we have to download the package
   # manually and install it ourselves. We are *not* able to upgrade to libpqxx-6.4 because 18.04
   # does not have the right version of libstdc++6 that it needs.
