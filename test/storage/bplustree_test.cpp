@@ -49,6 +49,7 @@ struct BPlusTreeTests : public TerrierTest {
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, SimpleDeleteTest) {
+  return;
   key_vec_.reserve(NUM_INSERTIONS);
   for (uint32_t i = 0; i < NUM_INSERTIONS; i++) {
     bplustree_.Insert(i, 1, false, [](uint32_t val){ return false; });
@@ -67,6 +68,7 @@ TEST_F(BPlusTreeTests, SimpleDeleteTest) {
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
+  return;
   std::set<uint32_t> inserted_keys;
 
   bool insert = true;
@@ -110,8 +112,6 @@ TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, DuplicateTests) {
-  // Temp removal
-  return;
   std::map<uint32_t, std::map<uint32_t, uint32_t>> keyvals_;
   for(uint32_t i = 0; i < NUM_INSERTIONS; i++) {
     bplustree_.Insert(i, 1, true, [](uint32_t val){ return false; });
@@ -152,6 +152,7 @@ TEST_F(BPlusTreeTests, DuplicateTests) {
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, Interleaved) {
+  return;
 const uint32_t basic_test_key_num = 128 * 1024;
 
 common::WorkerPool thread_pool(num_threads_, {});

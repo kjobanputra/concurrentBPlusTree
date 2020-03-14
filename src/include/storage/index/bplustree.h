@@ -566,16 +566,16 @@ class BPlusTree {
     // new from (in a new slot) depending on where it should live
     while (read_overflow != nullptr) {
       if (KeyCmpLess(read_overflow->keys_[read_id], guide_post)) {
+        if (write_id == OVERFLOW_SIZE) {
+          write_overflow = write_overflow->next_;
+          write_id = 0;
+        }
         // Move from from to from
         write_overflow->keys_[write_id] = read_overflow->keys_[read_id];
         write_overflow->values_[write_id] = read_overflow->values_[read_id];
 
         // Advance the write index
         write_id++;
-        if (write_id == OVERFLOW_SIZE) {
-          write_overflow = write_overflow->next_;
-          write_id = 0;
-        }
       } else {
         // Lazy allocation still means we have to allocate eventually, and now we know we need allocate
         if (to_overflow == nullptr) {
@@ -1316,11 +1316,19 @@ class BPlusTree {
     }
 
     if (deleted) {
+      TERRIER_ASSERT(current != nullptr, "Should have a node");
       OverflowNode *hole = current;
       while (current->next_ != nullptr) {
         prev = current;
         current = current->next_;
       }
+      // This shouldn't happen, but sometimes we don't delete nodes we should... this will clean that up
+      if (current->filled_keys_ == 0) {
+        OverflowNode::Delete(current);
+        current = prev;
+        // Don't have to update prev because this current will not get deleted
+      }
+      TERRIER_ASSERT(current->filled_keys_ > 0, "Should have keys in the node");
       hole->values_[i] = current->values_[current->filled_keys_ - 1];
       current->filled_keys_--;
       if (current->filled_keys_ == 0) {
@@ -1370,6 +1378,9 @@ class BPlusTree {
   }
 
   void StealOverflow(OverflowNode **pointer, OverflowNode *other, KeyType key) {
+    if (other == nullptr) {
+      return; // Nothing to steal!
+    }
     OverflowNode *write_overflow = other;
     uint32_t write_index = 0;
     while (other != nullptr) {
