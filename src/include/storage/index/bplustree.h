@@ -1097,6 +1097,10 @@ class BPlusTree {
     }
 
     // Key does not exist in the tree
+    if (leaf->filled_keys_ == 0) {
+      // Empty leaf special case
+      return {this, nullptr, 0};
+    }
     return {this, leaf, leaf->filled_keys_ - 1};
   }
 
@@ -1335,6 +1339,7 @@ class BPlusTree {
 
   template <typename Value>
   void RemoveFromNode(GenericNode<Value> *node, uint32_t index) {
+    TERRIER_ASSERT(index < node->filled_keys_, "Not a valid index for removal!");
     for(uint32_t j = index + 1; j < node->filled_keys_; j++) {
       node->keys_[j - 1] = node->keys_[j];
       node->values_[j - 1] = node->values_[j];
@@ -1395,9 +1400,14 @@ class BPlusTree {
       uint32_t size = left->filled_keys_;
       if(size > MIN_CHILDREN) {
         // Borrow case
-        InsertIntoNode(node, start, left->keys_[size - 1], left->values_[size - 1]);
+        auto key = left->keys_[size - 1];
+        if (start == 1) {
+          // Borrow the goalpost from the parent
+          node->keys_[0] = parent->keys_[index];
+        }
+        InsertIntoNode(node, 0, key, left->values_[size - 1]);
         RemoveFromNode(left, size - 1);
-        parent->keys_[index] = node->keys_[start];
+        parent->keys_[index] = key;
         TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
