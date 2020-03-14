@@ -1294,8 +1294,9 @@ class BPlusTree {
     return leaf;
   }
 
-  bool RemoveFromOverflow(OverflowNode *overflow, KeyType k, ValueType *v, ValueType *result) {
-    OverflowNode *current = overflow;
+  bool RemoveFromOverflow(OverflowNode **overflow, KeyType k, ValueType *v, ValueType *result) {
+    OverflowNode *current = *overflow;
+    OverflowNode **prevNext = overflow;
     OverflowNode *prev = nullptr;
     bool deleted = false;
     uint32_t i = 0;
@@ -1311,6 +1312,7 @@ class BPlusTree {
       if (i < current->filled_keys_) {
         break;
       }
+      prevNext = &(current->next_);
       prev = current;
       current = current->next_;
     }
@@ -1319,23 +1321,28 @@ class BPlusTree {
       TERRIER_ASSERT(current != nullptr, "Should have a node");
       OverflowNode *hole = current;
       while (current->next_ != nullptr) {
+        prevNext = &(current->next_);
         prev = current;
         current = current->next_;
       }
+
       // This shouldn't happen, but sometimes we don't delete nodes we should... this will clean that up
       if (current->filled_keys_ == 0) {
+        *prevNext = current->next_;
         OverflowNode::Delete(current);
+        if(prev == nullptr) {
+          return true;
+        }
         current = prev;
         // Don't have to update prev because this current will not get deleted
       }
+
       TERRIER_ASSERT(current->filled_keys_ > 0, "Should have keys in the node");
       hole->values_[i] = current->values_[current->filled_keys_ - 1];
       current->filled_keys_--;
       if (current->filled_keys_ == 0) {
         OverflowNode::Delete(current);
-        if (prev != nullptr) {
-          prev->next_ = nullptr;
-        }
+        *prevNext = nullptr;
       }
     }
 
@@ -1553,7 +1560,7 @@ class BPlusTree {
 
     if (allow_duplicates_) {
       if(value_eq_obj_(v, leaf->values_[i])) {
-        if(RemoveFromOverflow(leaf->overflow_, k, nullptr, &leaf->values_[i])) {
+        if(RemoveFromOverflow(&leaf->overflow_, k, nullptr, &leaf->values_[i])) {
           // We found a matching key/value pair!
           TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
           return true;
@@ -1562,7 +1569,7 @@ class BPlusTree {
       } else {
         ValueType ignore;
         // Try to remove it from the overflow node.
-        bool result = RemoveFromOverflow(leaf->overflow_, k, &leaf->values_[i], &ignore);
+        bool result = RemoveFromOverflow(&leaf->overflow_, k, &leaf->values_[i], &ignore);
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
         return result;
       }
