@@ -1296,10 +1296,11 @@ class BPlusTree {
 
   bool RemoveFromOverflow(OverflowNode *overflow, KeyType k, ValueType *v, ValueType *result) {
     OverflowNode *current = overflow;
+    OverflowNode *prev = nullptr;
     bool deleted = false;
     uint32_t i = 0;
 
-    while(current != nullptr) {
+    while (current != nullptr) {
       for(i = 0; i < current->filled_keys_; i++) {
         if(KeyCmpEqual(k, current->keys_[i]) && (v == nullptr || value_eq_obj_(*v, current->values_[i]))) {
           *result = current->values_[i];
@@ -1307,34 +1308,110 @@ class BPlusTree {
           break;
         }
       }
-      if(i < current->filled_keys_) {
+      if (i < current->filled_keys_) {
         break;
       }
+      prev = current;
       current = current->next_;
     }
 
-    if(deleted) {
-      OverflowNode *prev = current;
-      i++;
-      while (current != nullptr) {
-        for (; i < current->filled_keys_; i++) {
-          current->values_[i - 1] = current->values_[i];
-        }
-
+    if (deleted) {
+      OverflowNode *hole = current;
+      while (current->next_ != nullptr) {
         prev = current;
         current = current->next_;
-        if (current != nullptr) {
-          prev->values_[prev->filled_keys_ - 1] = current->values_[0];
-          i = 1;
-        }
       }
-
-      if (prev != nullptr) {
-        prev->filled_keys_--;
+      hole->values_[i] = current->values_[current->filled_keys_ - 1];
+      current->filled_keys_--;
+      if (current->filled_keys_ == 0) {
+        OverflowNode::Delete(current);
+        if (prev != nullptr) {
+          prev->next_ = nullptr;
+        }
       }
     }
 
     return deleted;
+  }
+
+  void MergeOverflow(OverflowNode **pointer, OverflowNode *other) {
+    if (other == nullptr) return; // No merging
+
+    OverflowNode *last = nullptr;
+    if (*pointer != nullptr) {
+      last = *pointer;
+      while (last->next_ != nullptr) {
+        pointer = &last->next_;
+        last = last->next_;
+      }
+    }
+
+    // Join all full nodes
+    *pointer = other;
+
+    // Merge last two nodes
+    while (other->next_ != nullptr) {
+      other = other->next_;
+    }
+
+    if (last != nullptr) {
+      while (last->filled_keys_ > 0 && other->filled_keys_ < OVERFLOW_SIZE) {
+        other->keys_[other->filled_keys_] = last->keys_[last->filled_keys_ - 1];
+        other->values_[other->filled_keys_] = last->values_[last->filled_keys_ - 1];
+        other->filled_keys_++;
+        last->filled_keys_--;
+      }
+      if (last->filled_keys_ == 0) {
+        OverflowNode::Delete(last);
+      } else {
+        other->next_ = last;
+      }
+    }
+  }
+
+  void StealOverflow(OverflowNode **pointer, OverflowNode *other, KeyType key) {
+    OverflowNode *write_overflow = other;
+    uint32_t write_index = 0;
+    while (other != nullptr) {
+      for (uint32_t i = 0; i < other->filled_keys_; i++) {
+        if (KeyCmpEqual(key, other->keys_[i])) {
+          // Move it to the new node
+          if (*pointer == nullptr) {
+            *pointer = OverflowNode::CreateNew();
+          }
+          (*pointer)->keys_[(*pointer)->filled_keys_] = key;
+          (*pointer)->values_[(*pointer)->filled_keys_] = other->values_[i];
+          (*pointer)->filled_keys_++;
+          if ((*pointer)->filled_keys_ == OVERFLOW_SIZE) {
+            pointer = &(*pointer)->next_;
+          }
+        } else {
+          // Keep it in the same node
+          if (write_index == OVERFLOW_SIZE) {
+            write_overflow = write_overflow->next_;
+            write_index = 0;
+          }
+
+          write_overflow->keys_[write_index] = other->keys_[i];
+          write_overflow->values_[write_index] = other->values_[i];
+          write_index++;
+        }
+      }
+      other = other->next_;
+    }
+
+    // Update filled_keys
+    write_overflow->filled_keys_ = write_index;
+
+    // Free non-used things
+    OverflowNode *prev = write_overflow;
+    OverflowNode *current = write_overflow->next_;
+    write_overflow->next_ = nullptr;
+    while (current != nullptr) {
+      prev = current;
+      current = current->next_;
+      OverflowNode::Delete(prev);
+    }
   }
 
   template <typename Value>
@@ -1353,7 +1430,9 @@ class BPlusTree {
                                 GenericNode<Value> *right,
                                 uint32_t start,
                                 InteriorNode *parent,
-                                uint32_t index) {
+                                uint32_t index,
+                                KeyType *borrowed_key,
+                                GenericNode<Value> **borrowed_from) {
     TERRIER_ASSERT(node->filled_keys_ < MIN_CHILDREN, "Rebalance should be called on an unbalanced node!");
 
     if(index == 0) { // 1 is the minimum index
@@ -1366,6 +1445,12 @@ class BPlusTree {
 
         InsertIntoNode(node, node->filled_keys_, k_insert, right->values_[0]);
         RemoveFromNode(right, 0);
+
+        if (borrowed_key != nullptr) {
+          *borrowed_key = k_insert;
+          *borrowed_from = right;
+        }
+
         TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
@@ -1408,6 +1493,12 @@ class BPlusTree {
         InsertIntoNode(node, 0, key, left->values_[size - 1]);
         RemoveFromNode(left, size - 1);
         parent->keys_[index] = key;
+
+        if (borrowed_key != nullptr) {
+          *borrowed_key = key;
+          *borrowed_from = left;
+        }
+
         TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
@@ -1451,10 +1542,8 @@ class BPlusTree {
 
     if (allow_duplicates_) {
       if(value_eq_obj_(v, leaf->values_[i])) {
-        ValueType newVal;
-        if(RemoveFromOverflow(leaf->overflow_, k, nullptr, &newVal)) {
+        if(RemoveFromOverflow(leaf->overflow_, k, nullptr, &leaf->values_[i])) {
           // We found a matching key/value pair!
-          leaf->values_[i] = newVal;
           TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
           return true;
         }
@@ -1481,14 +1570,23 @@ class BPlusTree {
       return true;
     }
 
-    LeafNode *preserved =
-        reinterpret_cast<LeafNode*>(Rebalance(leaf, leaf->prev_, leaf->next_, 0, potential_changes.back(), indices.back()));
+    LeafNode *borrowed_from;
+    auto **parameter = reinterpret_cast<GenericNode<ValueType>**>(&borrowed_from);
+    KeyType borrowed_key;
+    auto *preserved =
+        reinterpret_cast<LeafNode*>(Rebalance(leaf, leaf->prev_, leaf->next_, 0, potential_changes.back(),
+            indices.back(), &borrowed_key, parameter));
     if(preserved == nullptr) {
+      StealOverflow(&leaf->overflow_, borrowed_from->overflow_, borrowed_key);
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
       return true; // No further rebalancing needed
     }
 
     TERRIER_ASSERT(preserved == leaf->prev_ || preserved == leaf->next_, "We always merge into leaf");
+
+    // Merge our overflow into the preserved leaf
+    MergeOverflow(&preserved->overflow_, leaf->overflow_);
+
     if(leaf->prev_ != nullptr) {
       leaf->prev_->next_ = leaf->next_;
     }
@@ -1522,9 +1620,9 @@ class BPlusTree {
       TERRIER_ASSERT(left != nullptr || right != nullptr, "Should not have reached the root!");
 
       RemoveFromNode(current, i);
-
+      GenericNode<Child> **unused = nullptr;
       InteriorNode *preserved_interior = reinterpret_cast<InteriorNode *>(
-          Rebalance(current, left, right, 1, potential_changes.back(), indices.back()));
+          Rebalance(current, left, right, 1, potential_changes.back(), indices.back(), nullptr, unused));
       if (preserved_interior == nullptr) {
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
         return true;  // No further rebalancing needed!
