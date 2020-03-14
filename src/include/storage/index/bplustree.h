@@ -1395,9 +1395,9 @@ class BPlusTree {
       uint32_t size = left->filled_keys_;
       if(size > MIN_CHILDREN) {
         // Borrow case
-        InsertIntoNode(node, start, left->keys_[size - 1], left->values_[size - 1]);
+        InsertIntoNode(node, 0, left->keys_[size - 1], left->values_[size - 1]);
         RemoveFromNode(left, size - 1);
-        parent->keys_[index] = node->keys_[start];
+        parent->keys_[index] = node->keys_[0];
         TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
