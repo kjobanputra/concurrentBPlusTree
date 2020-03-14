@@ -1108,7 +1108,7 @@ class BPlusTree {
     return {this, nullptr, 0};
   }
 
-  bool Insert(KeyType k, ValueType v, bool allow_duplicates, const std::function<bool(const ValueType &)> &predicate) {
+  bool Insert(KeyType k, ValueType v, bool allow_duplicates = true, const std::function<bool(const ValueType &)> &predicate = [](ValueType v){ return false; }) {
     this->allow_duplicates_ = allow_duplicates;
 
 #ifdef DEEP_DEBUG
@@ -1202,7 +1202,7 @@ class BPlusTree {
       if ((*inner)->filled_keys_ < NUM_CHILDREN) {
         // Yes! Just insert!
         i = FindKey(*inner, guide_post);
-        TERRIER_ASSERT(!KeyCmpEqual(guide_post, (*inner)->keys_[i]), "We should not have duplicated guide posts!");
+        TERRIER_ASSERT(i >= (*inner)->filled_keys_ || !KeyCmpEqual(guide_post, (*inner)->keys_[i]), "We should not have duplicated guide posts!");
 
         InsertIntoNode(*inner, i, guide_post, to_insert);
         (*inner)->latch_.unlock();
@@ -1535,7 +1535,7 @@ class BPlusTree {
     uint32_t i = FindKey(leaf, k);
 
     // Can't delete a key that doesn't exist in the tree
-    if (!KeyCmpEqual(k, leaf->keys_[i])) {
+    if (i >= leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) {
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
       return false;
     }
