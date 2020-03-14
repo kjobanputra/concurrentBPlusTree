@@ -1322,7 +1322,7 @@ class BPlusTree {
         }
 
         // Cut the middleman out
-        parent->values_[index] = right;
+        parent->values_[index].as_interior_ = reinterpret_cast<InteriorNode*>(right);
         return right;
       }
     } else {
@@ -1333,6 +1333,7 @@ class BPlusTree {
         InsertIntoNode(node, start, left->keys_[size - 1], left->values_[size - 1]);
         RemoveFromNode(left, size - 1);
         parent->keys_[index - 1] = node->keys_[start];
+        return nullptr;
       } else {
         // Merge Case
         uint32_t orig_size = left->filled_keys_;
@@ -1359,8 +1360,7 @@ class BPlusTree {
     std::vector<InteriorNode *> left_siblings;
     std::vector<InteriorNode *> right_siblings;
 
-    leaf = TraverseTrackWithSiblings(k, potential_changes, indices, left_siblings, right_siblings);
-    TERRIER_ASSERT(leaf == potential_changes.back(), "Leaf level is not retained in the delete vectors.");
+    leaf = TraverseTrackWithSiblings(root_, k, potential_changes, indices, left_siblings, right_siblings);
 
     uint32_t i = FindKey(leaf, k);
 
@@ -1379,9 +1379,9 @@ class BPlusTree {
       } else {
         ValueType ignore;
         // Try to remove it from the overflow node.
-        return RemoveFromOverflow(leaf->overflow_, k, &leaf->values[i], &ignore);
+        return RemoveFromOverflow(leaf->overflow_, k, &leaf->values_[i], &ignore);
       }
-    } else if(!value_eq_obj_(v, leaf->values[i])) {
+    } else if(!value_eq_obj_(v, leaf->values_[i])) {
       return false; // Can't delete a key that doesn't match the value :(
     }
 
@@ -1393,26 +1393,27 @@ class BPlusTree {
       return true;
     }
 
-    LeafNode *preserved = Rebalance(leaf, leaf->left, leaf->right, 0, potential_changes.back(), indices.back());
+    LeafNode *preserved =
+        reinterpret_cast<LeafNode*>(Rebalance(leaf, leaf->prev_, leaf->next_, 0, potential_changes.back(), indices.back()));
     if(preserved == nullptr) {
       return true; // No further rebalancing needed
     }
 
-    TERRIER_ASSERT(preserved == leaf->left || preserved == leaf->right, "We always merge into leaf");
-    leaf->left_->right_ = leaf->right_;
-    leaf->right_->left_ = leaf->left_;
+    TERRIER_ASSERT(preserved == leaf->prev_ || preserved == leaf->next_, "We always merge into leaf");
+    leaf->prev_->next_ = leaf->next_;
+    leaf->next_->prev_ = leaf->prev_;
 
 
-    if(preserved == leaf->left) {
+    if(preserved == leaf->prev_) {
       i = indices.back();
       indices.pop_back();
     } else {
-      TERRIER_ASSERT(preserved == leaf->right, "Only other option");
+      TERRIER_ASSERT(preserved == leaf->next_, "Only other option");
       i = indices.back() + 1;
       indices.pop_back();
       TERRIER_ASSERT(i < potential_changes.back()->filled_keys_, "i should always be a valid spot!");
     }
-    InteriorNode::Delete(leaf);
+    LeafNode::Delete(leaf);
 
     InteriorNode *current;
     InteriorNode *left;
@@ -1430,12 +1431,13 @@ class BPlusTree {
 
       RemoveFromNode(current, i);
 
-      InteriorNode *preserved_interior = Rebalance(current, left, right, 1, potential_changes.back(), indices.back());
+      InteriorNode *preserved_interior =
+          reinterpret_cast<InteriorNode*>(Rebalance(current, left, right, 1, potential_changes.back(), indices.back()));
       if(preserved_interior == nullptr) {
         return true; // No further rebalancing needed!
       }
 
-      TERRIER_ASSERT(preserved_interior == leaf->left || preserved_interior == leaf->right, "We always merge into leaf");
+      TERRIER_ASSERT(preserved_interior == left || preserved_interior == right, "We always merge into leaf");
 
       if(preserved_interior == left) {
         i = indices.back();

@@ -11,7 +11,7 @@ struct BPlusTreeTests : public TerrierTest {
  public:
   storage::index::BPlusTree<uint32_t, uint32_t> *bplustree_;
   std::vector<uint32_t> keyVec_;
-  BPlusTreeTests() : bplustree_(false) {}
+  BPlusTreeTests() : bplustree_(new BPlusTree<uint32_t, uint32_t>(false)) {}
   bool CheckDelete(uint32_t del_index) {
     bool is_b_plus_tree = bplustree_->IsBplusTree();
     /*
@@ -36,7 +36,7 @@ TEST_F(BPlusTreeTests, DeleteTest) {
 
   while (!keyVec_.empty()) {
     uint32_t del_index = rand() % keyVec_.size();
-    bplustree_->Delete(keyVec_[del_index]);
+    bplustree_->Delete(keyVec_[del_index], 1);
     keyVec_.erase(keyVec_.begin()+del_index);
     EXPECT_TRUE(CheckDelete(del_index));
   }
