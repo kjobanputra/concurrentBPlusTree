@@ -49,7 +49,6 @@ struct BPlusTreeTests : public TerrierTest {
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, SimpleDeleteTest) {
-  return;
   key_vec_.reserve(NUM_INSERTIONS);
   for (uint32_t i = 0; i < NUM_INSERTIONS; i++) {
     bplustree_.Insert(i, 1, false, [](uint32_t val){ return false; });
@@ -68,7 +67,6 @@ TEST_F(BPlusTreeTests, SimpleDeleteTest) {
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
-  return;
   std::set<uint32_t> inserted_keys;
 
   bool insert = true;

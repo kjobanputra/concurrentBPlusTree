@@ -1330,14 +1330,13 @@ class BPlusTree {
       if (current->filled_keys_ == 0) {
         *prevNext = current->next_;
         OverflowNode::Delete(current);
-        if(prev == nullptr) {
-          return true;
-        }
+        TERRIER_ASSERT(prev != nullptr, "Must have at least one overflow");
         current = prev;
         // Don't have to update prev because this current will not get deleted
       }
 
       TERRIER_ASSERT(current->filled_keys_ > 0, "Should have keys in the node");
+      hole->keys_[i] = current->keys_[current->filled_keys_ - 1];
       hole->values_[i] = current->values_[current->filled_keys_ - 1];
       current->filled_keys_--;
       if (current->filled_keys_ == 0) {
@@ -1388,6 +1387,10 @@ class BPlusTree {
     if (other == nullptr) {
       return; // Nothing to steal!
     }
+    // Check if current node is full
+    while (*pointer != nullptr && (*pointer)->filled_keys_ == OVERFLOW_SIZE) {
+      pointer = &(*pointer)->next_;
+    }
     OverflowNode *write_overflow = other;
     uint32_t write_index = 0;
     while (other != nullptr) {
@@ -1397,6 +1400,7 @@ class BPlusTree {
           if (*pointer == nullptr) {
             *pointer = OverflowNode::CreateNew();
           }
+          TERRIER_ASSERT((*pointer)->filled_keys_ < OVERFLOW_SIZE, "Should be room in the overflow node");
           (*pointer)->keys_[(*pointer)->filled_keys_] = key;
           (*pointer)->values_[(*pointer)->filled_keys_] = other->values_[i];
           (*pointer)->filled_keys_++;
@@ -1422,7 +1426,7 @@ class BPlusTree {
     write_overflow->filled_keys_ = write_index;
 
     // Free non-used things
-    OverflowNode *prev = write_overflow;
+    OverflowNode *prev;
     OverflowNode *current = write_overflow->next_;
     write_overflow->next_ = nullptr;
     while (current != nullptr) {
@@ -1569,7 +1573,7 @@ class BPlusTree {
       } else {
         ValueType ignore;
         // Try to remove it from the overflow node.
-        bool result = RemoveFromOverflow(&leaf->overflow_, k, &leaf->values_[i], &ignore);
+        bool result = RemoveFromOverflow(&leaf->overflow_, k, &v, &ignore);
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
         return result;
       }
