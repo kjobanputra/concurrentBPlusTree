@@ -2,6 +2,7 @@
 
 #include <execution/sql/memory_pool.h>
 #include <loggers/index_logger.h>
+#include <execinfo.h>
 
 #include <functional>
 #include <queue>
@@ -59,12 +60,17 @@ namespace terrier::storage::index {
  * Number of children an interior node is allowed to have, or
  * equivalently the number of keys a leaf node is allowed to store
  */
-constexpr uint32_t NUM_CHILDREN = 256;
+constexpr uint32_t NUM_CHILDREN = 5;
 
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 512;
+constexpr uint32_t OVERFLOW_SIZE = 5;
+
+/**
+ * Length of time to try to increment before dying
+ */
+constexpr std::chrono::duration TIMEOUT = std::chrono::nanoseconds(100);
 
 /**
  * Minimum number of children an interior node is allowed to have
@@ -73,6 +79,34 @@ constexpr uint32_t OVERFLOW_SIZE = 512;
 constexpr uint32_t MIN_CHILDREN = NUM_CHILDREN / 2 + NUM_CHILDREN % 2;
 
 enum class SiblingType { Left, Right, Neither };
+
+#ifndef NDEBUG
+ class DebugLock : public std::shared_timed_mutex
+ {
+  public:
+   std::atomic<std::thread::id> holder_;
+   void *trace_[10];
+   std::atomic<size_t> size_;
+   void lock() {  // NOLINT for lock name compatibility
+     if (holder_ == std::this_thread::get_id()) {
+       StackTrace();
+       TERRIER_ASSERT(false, "Should not lock twice!");
+     }
+     std::shared_timed_mutex::lock();
+     holder_ = std::this_thread::get_id();
+     size_ = backtrace(trace_, 10);
+   }
+
+   void unlock() {  // NOLINT for lock name compatibility
+     holder_ = std::thread::id();
+     std::shared_timed_mutex::unlock();
+   }
+
+   void StackTrace() {
+     backtrace_symbols_fd(trace_, size_, STDERR_FILENO);
+   }
+ };
+#endif // NDEBUG
 
 template <typename KeyType, typename ValueType, typename KeyComparator = std::less<KeyType>,
           typename KeyEqualityChecker = std::equal_to<KeyType>, typename KeyHashFunc = std::hash<KeyType>,
@@ -113,7 +147,11 @@ class BPlusTree {
     uint32_t filled_keys_ = 0;
     KeyType keys_[NUM_CHILDREN];
     Value values_[NUM_CHILDREN];
-    mutable std::shared_mutex latch_;
+#ifndef NDEBUG
+    mutable DebugLock latch_;
+#else
+    mutable std::shared_timed_mutex latch_;
+#endif
 
     friend class BPlusTree;
   };
@@ -186,7 +224,7 @@ class BPlusTree {
     static LeafNode *CreateNew() {
       auto *node = reinterpret_cast<LeafNode *>(mem_pool.Allocate(sizeof(class LeafNode), true));
       // Initialize the shared mutex
-      new (&node->latch_) std::shared_mutex();
+      new (&node->latch_) std::shared_timed_mutex();
       return node;
     }
 
@@ -348,7 +386,7 @@ class BPlusTree {
     static InteriorNode *CreateNew() {
       auto *node = reinterpret_cast<InteriorNode *>(mem_pool.Allocate(sizeof(class InteriorNode), true));
       // Initialize the shared mutex
-      new (&node->latch_) std::shared_mutex();
+      new (&node->latch_) std::shared_timed_mutex();
       return node;
     }
 
@@ -642,7 +680,7 @@ class BPlusTree {
   KeyType SplitInterior(InteriorNode *from, InteriorNode *to, KeyType guide_post, InteriorNode *child) {
     // Find out where to insert this node
     uint32_t i = FindKey(from, guide_post);
-    TERRIER_ASSERT(!KeyCmpEqual(guide_post, from->keys_[i]), "We should not have duplicated guide posts!");
+    TERRIER_ASSERT(i >= from->filled_keys_ || !KeyCmpEqual(guide_post, from->keys_[i]), "We should not have duplicated guide posts!");
 
     // Perform the insert
     to->filled_keys_ = 1;
@@ -825,11 +863,16 @@ class BPlusTree {
     const BPlusTree *tree_;
     LeafNode *current_;
     uint32_t index_;
+    bool valid_;
 
     KeyIterator(const BPlusTree *tree, LeafNode *current, uint32_t index)
-        : tree_(tree), current_(current), index_(index) {}
+        : tree_(tree), current_(current), index_(index), valid_(true) {}
 
    public:
+    bool Valid() const {
+      return valid_;
+    }
+
     /**
      * Gets the primary (first-inserted) value stored for this key.
      */
@@ -876,7 +919,12 @@ class BPlusTree {
       if (index_ >= current_->filled_keys_) {
         auto *next = current_->next_;
         if (next) {
-          next->latch_.lock_shared();
+          bool acquired = next->latch_.try_lock_shared_for(TIMEOUT);
+          if(!acquired) {
+            valid_ = false;
+            current_->latch_.unlock_shared();
+            return *this;
+          }
         }
         current_->latch_.unlock_shared();
         current_ = next;
@@ -905,7 +953,12 @@ class BPlusTree {
       if (index_ == 0) {
         auto *prev = current_->prev_;
         if (prev != nullptr) {
-          prev->latch_.lock_shared();
+          bool acquired = prev->latch_.try_lock_shared_for(TIMEOUT);
+          if(!acquired) {
+            valid_ = false;
+            current_->latch_.unlock_shared();
+            return *this;
+          }
         }
         current_->latch_.unlock_shared();
         current_ = prev;
@@ -992,6 +1045,11 @@ class BPlusTree {
     auto *leaf = current->Leaf(0);
     leaf->latch_.lock_shared();
     current->latch_.unlock_shared();
+    if (leaf->filled_keys_ == 0) {
+      // Special case: empty tree
+      leaf->latch_.unlock_shared();
+      return {this, nullptr, 0};
+    }
     return {this, leaf, 0};
   }
 
@@ -1041,11 +1099,18 @@ class BPlusTree {
     }
 
     // Key exists in the next node over
-    if (leaf->next_) {
-      leaf->next_->latch_.lock_shared();
+    LeafNode *next = leaf->next_;
+    if (next) {
+      bool acquired = next->latch_.try_lock_shared_for(TIMEOUT);
+      if(!acquired) {
+        KeyIterator result = {this, next, 0};
+        result.valid_ = false;
+        leaf->latch_.unlock_shared();
+        return result;
+      }
     }
     leaf->latch_.unlock_shared();
-    return {this, leaf->next_, 0};
+    return {this, next, 0};
   }
 
   KeyIterator BeginLessEqual(const KeyType &key) const {
@@ -1093,6 +1158,7 @@ class BPlusTree {
 
     // Key does not exist in the tree
     if (leaf->filled_keys_ == 0) {
+      leaf->latch_.unlock_shared();
       // Empty leaf special case
       return {this, nullptr, 0};
     }
@@ -1104,14 +1170,12 @@ class BPlusTree {
   }
 
   bool Insert(KeyType k, ValueType v, bool allow_duplicates = true, const std::function<bool(const ValueType &)> &predicate = [](ValueType v){ return false; }) {
-    this->allow_duplicates_ = allow_duplicates;
 
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
 #endif
 
     std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
-    potential_changes.reserve(depth_);
 
     InteriorNode *save = root_;
     save->latch_.lock();
@@ -1120,13 +1184,15 @@ class BPlusTree {
       save = root_;
       save->latch_.lock();
     }
+    this->allow_duplicates_ = allow_duplicates;
+    potential_changes.reserve(depth_);
 
     LeafNode *leaf = TraverseTrack(root_, k, &potential_changes);
 
     uint32_t i = FindKey(leaf, k);
 
     // If duplicates are not allowed, do not insert duplicates!
-    if (!allow_duplicates_ && i != leaf->filled_keys_ && KeyCmpEqual(k, leaf->keys_[i])) {
+    if (!allow_duplicates && i != leaf->filled_keys_ && KeyCmpEqual(k, leaf->keys_[i])) {
       for (const auto &interior : potential_changes) {
         interior->latch_.unlock();
       }
@@ -1253,6 +1319,19 @@ class BPlusTree {
       // This is the case where we know the current level will not need to merge. We don't need to keep track of the
       // parents anymore. We preserve the last node since future levels could potentially need it.
       if (current->filled_keys_ > MIN_CHILDREN) {
+        for (const auto &interior : potential_changes) {
+          interior->latch_.unlock();
+        }
+        for (const auto &interior : left_siblings) {
+          if (interior != nullptr) {
+            interior->latch_.unlock();
+          }
+        }
+        for (const auto &interior : right_siblings) {
+          if (interior != nullptr) {
+            interior->latch_.unlock();
+          }
+        }
         potential_changes.erase(potential_changes.begin(), potential_changes.end());
         left_siblings.erase(left_siblings.begin(), left_siblings.end());
         right_siblings.erase(right_siblings.begin(), right_siblings.end());
@@ -1269,20 +1348,32 @@ class BPlusTree {
       // Only add the right sibling (potential right merge/borrow node) if leftmost node
       if (current->leaf_children_) {
         leaf = current->Leaf(i);
+        leaf->latch_.lock();
+        if (leaf->prev_ != nullptr) {
+          leaf->prev_->latch_.lock();
+        }
+        if (leaf->next_ != nullptr) {
+          leaf->next_->latch_.lock();
+        }
       } else {
         if(i == 0 && left != nullptr) {
           left = left->Interior(left->filled_keys_ - 1);
+          left->latch_.lock();
         } else if(i != 0) {
           left = current->Interior(i - 1);
+          left->latch_.lock();
         }
 
         if(i == current->filled_keys_ - 1 && right != nullptr) {
           right = right->Interior(0);
+          right->latch_.lock();
         } else if (i != current->filled_keys_ - 1) {
           right = current->Interior(i + 1);
+          right->latch_.lock();
         }
 
         current = current->Interior(i);
+        current->latch_.lock();
       }
     }
 
@@ -1540,20 +1631,56 @@ class BPlusTree {
   }
 
   bool Delete(KeyType k, ValueType v) {
+#ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
     LeafNode *leaf = nullptr;
     std::vector<InteriorNode *> potential_changes;
     std::vector<uint32_t> indices;
     std::vector<InteriorNode *> left_siblings;
     std::vector<InteriorNode *> right_siblings;
 
+    InteriorNode *save = root_;
+    save->latch_.lock();
+    while (save != root_) {
+      save->latch_.unlock();
+      save = root_;
+      save->latch_.lock();
+    }
+
     leaf = TraverseTrackWithSiblings(root_, k, potential_changes, indices, left_siblings, right_siblings);
 
     uint32_t i = FindKey(leaf, k);
 
+    auto unlock_all = [&]() {
+      if (leaf->prev_ != nullptr) {
+        leaf->prev_->latch_.unlock();
+      }
+      if (leaf->next_ != nullptr) {
+        leaf->next_->latch_.unlock();
+      }
+      leaf->latch_.unlock();
+      for (const auto &interior : potential_changes) {
+        interior->latch_.unlock();
+      }
+      for (const auto &interior : left_siblings) {
+        if (interior != nullptr) {
+          interior->latch_.unlock();
+        }
+      }
+      for (const auto &interior : right_siblings) {
+        if (interior != nullptr) {
+          interior->latch_.unlock();
+        }
+      }
+    };
+
     // Can't delete a key that doesn't exist in the tree
     if (i >= leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) {
+      unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return false;
     }
 
@@ -1561,7 +1688,10 @@ class BPlusTree {
       if(value_eq_obj_(v, leaf->values_[i])) {
         if(RemoveFromOverflow(&leaf->overflow_, k, nullptr, &leaf->values_[i])) {
           // We found a matching key/value pair!
+          unlock_all();
+#ifdef DEEP_DEBUG
           TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
           return true;
         }
         // We did not find a matching key/value pair so we must fully delete this version
@@ -1569,11 +1699,17 @@ class BPlusTree {
         ValueType ignore;
         // Try to remove it from the overflow node.
         bool result = RemoveFromOverflow(&leaf->overflow_, k, &v, &ignore);
+        unlock_all();
+#ifdef DEEP_DEBUG
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
         return result;
       }
     } else if(!value_eq_obj_(v, leaf->values_[i])) {
+      unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return false; // Can't delete a key that doesn't match the value :(
     }
 
@@ -1582,7 +1718,10 @@ class BPlusTree {
 
     if((depth_ == 1 && root_->filled_keys_ == 1) || leaf->filled_keys_ >= MIN_CHILDREN) {
       // No rebalancing needed
+      unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
 
       return true;
     }
@@ -1595,7 +1734,10 @@ class BPlusTree {
             indices.back(), &borrowed_key, parameter));
     if(preserved == nullptr) {
       StealOverflow(&leaf->overflow_, borrowed_from->overflow_, borrowed_key);
+      unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return true; // No further rebalancing needed
     }
 
@@ -1606,9 +1748,11 @@ class BPlusTree {
 
     if(leaf->prev_ != nullptr) {
       leaf->prev_->next_ = leaf->next_;
+      leaf->prev_->latch_.unlock();
     }
     if(leaf->next_ != nullptr) {
       leaf->next_->prev_ = leaf->prev_;
+      leaf->next_->latch_.unlock();
     }
 
     if(preserved == leaf->prev_) {
@@ -1628,11 +1772,10 @@ class BPlusTree {
 
     while(potential_changes.size() > 1) {
       current = potential_changes.back();
-      potential_changes.pop_back();
       left = left_siblings.back();
-      left_siblings.pop_back();
       right = right_siblings.back();
-      right_siblings.pop_back();
+      potential_changes.pop_back();
+      // We pop left/right at the bottom for easier coding
 
       TERRIER_ASSERT(left != nullptr || right != nullptr, "Should not have reached the root!");
 
@@ -1641,7 +1784,24 @@ class BPlusTree {
       InteriorNode *preserved_interior = reinterpret_cast<InteriorNode *>(
           Rebalance(current, left, right, 1, potential_changes.back(), indices.back(), nullptr, unused));
       if (preserved_interior == nullptr) {
+        current->latch_.unlock();
+        for (const auto &interior : potential_changes) {
+          interior->latch_.unlock();
+        }
+        current->latch_.unlock();
+        for (const auto &interior : left_siblings) {
+          if (interior != nullptr) {
+            interior->latch_.unlock();
+          }
+        }
+        for (const auto &interior : right_siblings) {
+          if (interior != nullptr) {
+            interior->latch_.unlock();
+          }
+        }
+#ifdef DEEP_DEBUG
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
         return true;  // No further rebalancing needed!
       }
 
@@ -1650,22 +1810,48 @@ class BPlusTree {
       if (preserved_interior == left) {
         i = indices.back();
         indices.pop_back();
+        TERRIER_ASSERT(potential_changes.back()->Interior(i) == current, "Child should still exist in parent");
       } else {
         TERRIER_ASSERT(preserved_interior == right, "Only other option");
         i = indices.back() + 1;
         indices.pop_back();
         TERRIER_ASSERT(i < potential_changes.back()->filled_keys_, "i should always be a valid spot!");
       }
+      TERRIER_ASSERT(potential_changes.back()->latch_.holder_ == std::this_thread::get_id(),
+          "Lock should be held on parent for deletion");
       InteriorNode::Delete(current);
+
+      // Unlock left/right latches
+      if (left != nullptr) {
+        left->latch_.unlock();
+      }
+      if (right != nullptr) {
+        right->latch_.unlock();
+      }
+
+      left_siblings.pop_back();
+      right_siblings.pop_back();
     }
 
     current = potential_changes.back();
     potential_changes.pop_back();
     TERRIER_ASSERT(potential_changes.empty(), "Should be done");
+
+    left = left_siblings.back();
+    right = right_siblings.back();
+    if (left != nullptr) {
+      left->latch_.unlock();
+    }
+    if (right != nullptr) {
+      right->latch_.unlock();
+    }
     RemoveFromNode(current, i);
 
     if(current->filled_keys_ >= MIN_CHILDREN) {
+      current->latch_.unlock();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return true;
     }
 
@@ -1673,11 +1859,22 @@ class BPlusTree {
 
     if(current->filled_keys_ == 1 && depth_ > 1) {
       --depth_;
-      root_ = root_->Interior(0);
-      InteriorNode::Delete(current);
+      InteriorNode *interior = root_->Interior(0);
+      for(uint32_t j = 0; j < interior->filled_keys_; j++) {
+        root_->keys_[j] = interior->keys_[j];
+        root_->values_[j] = interior->values_[j];
+      }
+      root_->filled_keys_ = interior->filled_keys_;
+      root_->leaf_children_ = interior->leaf_children_;
+      InteriorNode::Delete(interior);
+      current->latch_.unlock();
+    } else {
+      current->latch_.unlock();
     }
 
-    TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#ifdef DEEP_DEBUG
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
     return true;
   }
 
