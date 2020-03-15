@@ -23,23 +23,33 @@ struct BPlusTreeTests : public TerrierTest {
     }
 
     auto iter = bplustree_.BeginLessEqual(key);
-    while(iter != bplustree_.end() && iter.Key() == key) {
-      if(iter.Value() == val) {
+    if (iter == bplustree_.end() || iter.Key() != key) {
+      iter.ReleaseLock();
+      return true;
+    }
+    if (iter.Value() == val) {
+      iter.ReleaseLock();
+      return false;
+    }
+    for (const auto &value : iter) {
+      if (value == val) {
         iter.ReleaseLock();
         return false;
       }
-      ++iter;
     }
     iter.ReleaseLock();
     return true;
   }
 
   uint32_t CountValues(uint32_t key) {
-    uint32_t result = 0;
     auto iter = bplustree_.BeginLessEqual(key);
-    while(iter != bplustree_.end() && iter.Key() == key) {
+    if (iter == bplustree_.end() || iter.Key() != key) {
+      iter.ReleaseLock();
+      return 0;
+    }
+    uint32_t result = 1;
+    for (const auto UNUSED_ATTRIBUTE &value : iter) {
       ++result;
-      ++iter;
     }
     iter.ReleaseLock();
     return result;
@@ -150,7 +160,6 @@ TEST_F(BPlusTreeTests, DuplicateTests) {
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, Interleaved) {
-  return;
 const uint32_t basic_test_key_num = 128 * 1024;
 
 common::WorkerPool thread_pool(num_threads_, {});
