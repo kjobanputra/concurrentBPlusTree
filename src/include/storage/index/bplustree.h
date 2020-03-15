@@ -1340,7 +1340,7 @@ class BPlusTree {
         guide_post = SplitInterior(*inner, new_inner, guide_post, to_insert.as_interior_);
 
         auto *new_left = InteriorNode::CreateNew();
-        for (int j = 0; j < root_->filled_keys_; j++) {
+        for (uint32_t j = 0; j < root_->filled_keys_; j++) {
           new_left->keys_[j] = root_->keys_[j];
           new_left->values_[j] = root_->values_[j];
         }
