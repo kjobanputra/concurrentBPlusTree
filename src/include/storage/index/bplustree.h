@@ -82,9 +82,9 @@ enum class SiblingType { Left, Right, Neither };
    std::atomic<std::thread::id> holder_;
    void *trace_[10];
    std::atomic<size_t> size_;
-   void lock() { // NOLINT for lock name compatibility
+   void lock() {  // NOLINT for lock name compatibility
      if (holder_ == std::this_thread::get_id()) {
-       stack_trace();
+       StackTrace();
        TERRIER_ASSERT(false, "Should not lock twice!");
      }
      std::shared_mutex::lock();
@@ -92,12 +92,12 @@ enum class SiblingType { Left, Right, Neither };
      size_ = backtrace(trace_, 10);
    }
 
-   void unlock() {// NOLINT for lock name compatibility
+   void unlock() {  // NOLINT for lock name compatibility
      holder_ = std::thread::id();
      std::shared_mutex::unlock();
    }
 
-   void stack_trace() {
+   void StackTrace() {
      backtrace_symbols_fd(trace_, size_, STDERR_FILENO);
    }
  };
