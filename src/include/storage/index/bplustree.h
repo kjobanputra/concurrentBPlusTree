@@ -21,7 +21,7 @@ namespace terrier::storage::index {
 #define CHECK(x)                                                         \
   do {                                                                   \
     if (!(x)) {                                                          \
-      printf("Failed check (%s) on line: %d.\n", #x, __LINE__); \
+      INDEX_LOG_ERROR("Failed check (%s) on line: %d.\n", #x, __LINE__); \
       return false;                                                      \
     }                                                                    \
   } while (0)
@@ -59,12 +59,12 @@ namespace terrier::storage::index {
  * Number of children an interior node is allowed to have, or
  * equivalently the number of keys a leaf node is allowed to store
  */
-constexpr uint32_t NUM_CHILDREN = 5;
+constexpr uint32_t NUM_CHILDREN = 256;
 
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 5;
+constexpr uint32_t OVERFLOW_SIZE = 512;
 
 /**
  * Minimum number of children an interior node is allowed to have
@@ -314,8 +314,6 @@ class BPlusTree {
 
         auto last_leaf = Leaf(this->filled_keys_ - 1);
         CHECK(next == nullptr || next->leaf_children_);
-        TERRIER_ASSERT((next == nullptr && last_leaf->next_ == nullptr) ||
-              (next != nullptr && last_leaf->next_ == next->Leaf(0)), "");
         CHECK((next == nullptr && last_leaf->next_ == nullptr) ||
               (next != nullptr && last_leaf->next_ == next->Leaf(0)));
 
@@ -669,10 +667,7 @@ class BPlusTree {
     root_ = InteriorNode::CreateNew();
     root_->leaf_children_ = true;
     root_->filled_keys_ = 1;
-    TERRIER_ASSERT(root_->leaf_children_, "asd");
-    auto temp = LeafNode::CreateNew();
-    TERRIER_ASSERT(root_->leaf_children_, "asd");
-    root_->Leaf(0) = temp;
+    root_->Leaf(0) = LeafNode::CreateNew();
   }
 
   /**
