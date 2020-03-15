@@ -60,12 +60,12 @@ namespace terrier::storage::index {
  * Number of children an interior node is allowed to have, or
  * equivalently the number of keys a leaf node is allowed to store
  */
-constexpr uint32_t NUM_CHILDREN = 256;
+constexpr uint32_t NUM_CHILDREN = 5;
 
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 512;
+constexpr uint32_t OVERFLOW_SIZE = 5;
 
 /**
  * Minimum number of children an interior node is allowed to have
@@ -1601,7 +1601,9 @@ class BPlusTree {
   }
 
   bool Delete(KeyType k, ValueType v) {
+#ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
     LeafNode *leaf = nullptr;
     std::vector<InteriorNode *> potential_changes;
     std::vector<uint32_t> indices;
@@ -1646,7 +1648,9 @@ class BPlusTree {
     // Can't delete a key that doesn't exist in the tree
     if (i >= leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) {
       unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return false;
     }
 
@@ -1655,7 +1659,9 @@ class BPlusTree {
         if(RemoveFromOverflow(&leaf->overflow_, k, nullptr, &leaf->values_[i])) {
           // We found a matching key/value pair!
           unlock_all();
+#ifdef DEEP_DEBUG
           TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
           return true;
         }
         // We did not find a matching key/value pair so we must fully delete this version
@@ -1664,12 +1670,16 @@ class BPlusTree {
         // Try to remove it from the overflow node.
         bool result = RemoveFromOverflow(&leaf->overflow_, k, &v, &ignore);
         unlock_all();
+#ifdef DEEP_DEBUG
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
         return result;
       }
     } else if(!value_eq_obj_(v, leaf->values_[i])) {
       unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return false; // Can't delete a key that doesn't match the value :(
     }
 
@@ -1679,7 +1689,9 @@ class BPlusTree {
     if((depth_ == 1 && root_->filled_keys_ == 1) || leaf->filled_keys_ >= MIN_CHILDREN) {
       // No rebalancing needed
       unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
 
       return true;
     }
@@ -1693,7 +1705,9 @@ class BPlusTree {
     if(preserved == nullptr) {
       StealOverflow(&leaf->overflow_, borrowed_from->overflow_, borrowed_key);
       unlock_all();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return true; // No further rebalancing needed
     }
 
@@ -1740,6 +1754,7 @@ class BPlusTree {
       InteriorNode *preserved_interior = reinterpret_cast<InteriorNode *>(
           Rebalance(current, left, right, 1, potential_changes.back(), indices.back(), nullptr, unused));
       if (preserved_interior == nullptr) {
+        current->latch_.unlock();
         for (const auto &interior : potential_changes) {
           interior->latch_.unlock();
         }
@@ -1754,7 +1769,9 @@ class BPlusTree {
             interior->latch_.unlock();
           }
         }
+#ifdef DEEP_DEBUG
         TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
         return true;  // No further rebalancing needed!
       }
 
@@ -1802,7 +1819,9 @@ class BPlusTree {
 
     if(current->filled_keys_ >= MIN_CHILDREN) {
       current->latch_.unlock();
+#ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
       return true;
     }
 
@@ -1823,7 +1842,9 @@ class BPlusTree {
       current->latch_.unlock();
     }
 
-    TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#ifdef DEEP_DEBUG
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
     return true;
   }
 

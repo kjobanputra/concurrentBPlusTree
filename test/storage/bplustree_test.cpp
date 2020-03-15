@@ -6,14 +6,15 @@
 
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_LEAVES = 25;
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_KEYS_PER_LEAF = 4;
-constexpr uint32_t NUM_INSERTIONS = 10000; // NUM_LEAVES*NUM_KEYS_PER_LEAF;
+constexpr uint32_t NUM_INSERTIONS = 30; //10000; // NUM_LEAVES*NUM_KEYS_PER_LEAF;
 
 namespace terrier::storage::index {
 
 struct BPlusTreeTests : public TerrierTest {
  public:
-  const uint32_t num_threads_ =
-      MultiThreadTestUtil::HardwareConcurrency() + (MultiThreadTestUtil::HardwareConcurrency() % 2);
+  const uint32_t num_threads_ = 4;
+  //     MultiThreadTestUtil::HardwareConcurrency() + (MultiThreadTestUtil::HardwareConcurrency() % 2);
+
   storage::index::BPlusTree<uint32_t, uint32_t> bplustree_;
   std::vector<uint32_t> key_vec_;
   BPlusTreeTests() : bplustree_(false) {}
@@ -120,6 +121,7 @@ TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, DuplicateTests) {
+  return; // sppeeed
   std::map<uint32_t, std::map<uint32_t, uint32_t>> keyvals_;
   for(uint32_t i = 0; i < NUM_INSERTIONS; i++) {
     bplustree_.Insert(i, 1, true, [](uint32_t val){ return false; });
@@ -160,7 +162,7 @@ TEST_F(BPlusTreeTests, DuplicateTests) {
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, Interleaved) {
-const uint32_t basic_test_key_num = 128 * 1024;
+const uint32_t basic_test_key_num = 5; // * 1024;
 
 common::WorkerPool thread_pool(num_threads_, {});
 thread_pool.Startup();
