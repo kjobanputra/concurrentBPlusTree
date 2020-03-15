@@ -81,52 +81,57 @@ constexpr uint32_t MIN_CHILDREN = NUM_CHILDREN / 2 + NUM_CHILDREN % 2;
 enum class SiblingType { Left, Right, Neither };
 
 #ifndef NDEBUG
- class DebugLock : public std::shared_timed_mutex
- {
-  public:
-   std::atomic<std::thread::id> holder_;
-   std::atomic<uint32_t> shared_holders_;
+class DebugLock : public std::shared_timed_mutex
+{
+ public:
+    std::atomic<std::thread::id> holder_;
+    std::atomic<uint32_t> shared_holders_;
 
-   void *trace_[10];
-   std::atomic<size_t> size_;
-   void lock_shared() { // NOLINT for name compatibility
-    std::shared_timed_mutex::lock_shared();
-    shared_holders_++;
-   }
+    void *trace_[10];
+    std::atomic<size_t> size_;
+    void lock_shared() { // NOLINT for name compatibility
+     std::shared_timed_mutex::lock_shared();
+     TERRIER_ASSERT(holder_ == std::thread::id(), "No thread should be a writer");
+     shared_holders_++;
+    }
 
-   template <typename R, typename P>
-   bool try_lock_shared_for(const std::chrono::duration<R, P> &duration) { // NOLINT for name compatibility
+    template <typename R, typename P>
+    bool try_lock_shared_for(const std::chrono::duration<R, P> &duration) { // NOLINT for name compatibility
      bool result = std::shared_timed_mutex::try_lock_shared_for(duration);
      if(result) {
+       TERRIER_ASSERT(holder_ == std::thread::id(), "No thread should be a writer");
        shared_holders_++;
      }
      return result;
-   }
+    }
 
-   void unlock_shared() { // NOLINT for name compatibility
+    void unlock_shared() { // NOLINT for name compatibility
+     TERRIER_ASSERT(shared_holders_ > 0, "Must have at least one reader");
      shared_holders_--;
      std::shared_timed_mutex::unlock_shared();
-   }
+    }
 
-   void lock() {  // NOLINT for lock name compatibility
+    void lock() {  // NOLINT for lock name compatibility
      if (holder_ == std::this_thread::get_id()) {
        StackTrace();
        TERRIER_ASSERT(false, "Should not lock twice!");
      }
      std::shared_timed_mutex::lock();
+     TERRIER_ASSERT(shared_holders_ == 0, "Should be no readers now");
      holder_ = std::this_thread::get_id();
      size_ = backtrace(trace_, 10);
-   }
+    }
 
-   void unlock() {  // NOLINT for lock name compatibility
+    void unlock() {  // NOLINT for lock name compatibility
+     TERRIER_ASSERT(holder_ == std::this_thread::get_id(), "Should only unlock from the current thread");
      holder_ = std::thread::id();
      std::shared_timed_mutex::unlock();
-   }
+    }
 
-   void StackTrace() {
+    void StackTrace() {
      backtrace_symbols_fd(trace_, size_, STDERR_FILENO);
-   }
- };
+    }
+};
 #endif // NDEBUG
 
 template <typename KeyType, typename ValueType, typename KeyComparator = std::less<KeyType>,
@@ -1877,7 +1882,6 @@ class BPlusTree {
         for (const auto &interior : potential_changes) {
           interior->latch_.unlock();
         }
-        current->latch_.unlock();
         for (const auto &interior : left_siblings) {
           if (interior != nullptr) {
             interior->latch_.unlock();

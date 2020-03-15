@@ -303,7 +303,7 @@ delete_get_value_test();
 
 TEST_F(BPlusTreeTests, ScanDelete) {
   const uint32_t basic_test_key_num = 5 * 1024;
-  const uint32_t num_insertions = 5;
+  const uint32_t num_insertions = 10;
 
   common::WorkerPool thread_pool(num_threads_, {});
   thread_pool.Startup();
@@ -334,7 +334,7 @@ TEST_F(BPlusTreeTests, ScanDelete) {
         }
         EXPECT_EQ(count, 1);
         ++scan_itr;
-        if(!scan_itr.Valid()) {
+        if (!scan_itr.Valid()) {
           goto scan_start;
         }
       }
@@ -343,7 +343,7 @@ TEST_F(BPlusTreeTests, ScanDelete) {
         EXPECT_TRUE(result);
       }
       scan_start_2:
-      scan_itr = bplustree_.begin();
+      scan_itr = bplustree_.BeginLessEqual(basic_test_key_num);
       while (scan_itr != bplustree_.end()) {
         uint32_t key = scan_itr.Key();
         uint32_t target_value = id * basic_test_key_num + key;
@@ -357,8 +357,8 @@ TEST_F(BPlusTreeTests, ScanDelete) {
           }
         }
         EXPECT_EQ(count, 0);
-        ++scan_itr;
-        if(!scan_itr.Valid()) {
+        --scan_itr;
+        if (!scan_itr.Valid()) {
           goto scan_start_2;
         }
       }
