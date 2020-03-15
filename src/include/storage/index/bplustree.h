@@ -707,7 +707,6 @@ class BPlusTree {
    * Checks if this B+ Tree is truly a B+ Tree
    */
   [[nodiscard]] bool IsBplusTree() const {
-    return true;
     if (root_->filled_keys_ == 1) {
       // Root is not a valid interior node until we do a split!
       // However, this is only allowed to happen if the depth is truly 1
