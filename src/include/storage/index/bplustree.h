@@ -60,12 +60,12 @@ namespace terrier::storage::index {
  * Number of children an interior node is allowed to have, or
  * equivalently the number of keys a leaf node is allowed to store
  */
-constexpr uint32_t NUM_CHILDREN = 5;
+constexpr uint32_t NUM_CHILDREN = 256;
 
 /**
  * Number of keys stored in an overflow node.
  */
-constexpr uint32_t OVERFLOW_SIZE = 5;
+constexpr uint32_t OVERFLOW_SIZE = 512;
 
 /**
  * Length of time to try to increment before dying
