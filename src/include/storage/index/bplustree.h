@@ -85,8 +85,29 @@ enum class SiblingType { Left, Right, Neither };
  {
   public:
    std::atomic<std::thread::id> holder_;
+   std::atomic<uint32_t> shared_holders_;
+
    void *trace_[10];
    std::atomic<size_t> size_;
+   void lock_shared() { // NOLINT for name compatibility
+    std::shared_timed_mutex::lock_shared();
+    shared_holders_++;
+   }
+
+   template <typename R, typename P>
+   bool try_lock_shared_for(const std::chrono::duration<R, P> &duration) { // NOLINT for name compatibility
+     bool result = std::shared_timed_mutex::try_lock_shared_for(duration);
+     if(result) {
+       shared_holders_++;
+     }
+     return result;
+   }
+
+   void unlock_shared() { // NOLINT for name compatibility
+     shared_holders_--;
+     std::shared_timed_mutex::unlock_shared();
+   }
+
    void lock() {  // NOLINT for lock name compatibility
      if (holder_ == std::this_thread::get_id()) {
        StackTrace();
@@ -532,8 +553,9 @@ class BPlusTree {
    */
   LeafNode *TraverseTrack(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes) const {
     InteriorNode *current = root;
+    /**
     uint32_t max_depth = depth_;
-    uint32_t cur_depth = 1;
+    uint32_t cur_depth = 1;*/
     LeafNode *leaf = nullptr;
     while (leaf == nullptr) {
       // If we know we do not need to split (e.g. there are still open guide posts,
@@ -553,7 +575,7 @@ class BPlusTree {
       uint32_t i = FindKey(current, k) - 1;
 
       // If we've reached the leaf level, break out!
-      if (cur_depth == max_depth) {
+      if (current->leaf_children_) {
         leaf = current->Leaf(i);
         leaf->latch_.lock();
         if(potential_changes == nullptr) {
@@ -570,7 +592,7 @@ class BPlusTree {
           current->latch_.lock();
         }
       }
-      cur_depth++;
+      //cur_depth++;
     }
 
     // If the leaf definitely has enough room, then we don't need to split anything!
@@ -1183,13 +1205,7 @@ class BPlusTree {
       return {this, leaf, index - 1};
     }
 
-    // Key does not exist in the tree
-    if (leaf->filled_keys_ == 0) {
-      leaf->latch_.unlock_shared();
-      // Empty leaf special case
-      return {this, nullptr, 0};
-    }
-    return {this, leaf, leaf->filled_keys_ - 1};
+    return {this, leaf, index};
   }
 
   const KeyIterator end() const {  // NOLINT for STL name compability
@@ -1320,13 +1336,20 @@ class BPlusTree {
         new_inner->leaf_children_ = leaf_children;
         guide_post = SplitInterior(*inner, new_inner, guide_post, to_insert.as_interior_);
 
-        auto *new_root = InteriorNode::CreateNew();
-        new_root->keys_[1] = guide_post;
-        new_root->filled_keys_ = 2;
-        new_root->Interior(0) = *inner;
-        new_root->Interior(1) = new_inner;
+        auto *new_left = InteriorNode::CreateNew();
+        for(int j = 0; j < root_->filled_keys_; j++) {
+          new_left->keys_[j] = root_->keys_[j];
+          new_left->values_[j] = root_->values_[j];
+        }
+        new_left->filled_keys_ = root_->filled_keys_;
+        new_left->leaf_children_ = root_->leaf_children_;
+
+        root_->leaf_children_ = false;
+        root_->keys_[1] = guide_post;
+        root_->filled_keys_ = 2;
+        root_->Interior(0) = new_left;
+        root_->Interior(1) = new_inner;
         depth_++;
-        root_ = new_root;
         (*inner)->latch_.unlock();
       }
     } else {
@@ -1674,17 +1697,77 @@ class BPlusTree {
     }
   }
 
+  std::optional<bool> TryDeleteLeaf(LeafNode *leaf, KeyType k, ValueType v, uint32_t i) {
+    // Can't delete a key that doesn't exist in the tree
+    if (i >= leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) {
+      return std::make_optional(false);
+    }
+
+    if (allow_duplicates_) {
+      if(value_eq_obj_(v, leaf->values_[i])) {
+        if(RemoveFromOverflow(&leaf->overflow_, k, nullptr, &leaf->values_[i])) {
+          // We found a matching key/value pair!
+          return std::make_optional(true);
+        }
+        // We did not find a matching key/value pair so we must fully delete this version
+      } else {
+        ValueType ignore;
+        // Try to remove it from the overflow node.
+        bool result = RemoveFromOverflow(&leaf->overflow_, k, &v, &ignore);
+        return std::make_optional(result);
+      }
+    } else if(!value_eq_obj_(v, leaf->values_[i])) {
+      return std::make_optional(false); // Can't delete a key that doesn't match the value :(
+    }
+
+
+    if((depth_ == 1 && root_->filled_keys_ == 1) || leaf->filled_keys_ > MIN_CHILDREN) {
+      // No rebalancing needed
+      RemoveFromNode(leaf, i);
+      return std::make_optional(true);
+    }
+
+    return std::nullopt;
+  }
+
   bool Delete(KeyType k, ValueType v) {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
 #endif
+
     LeafNode *leaf = nullptr;
+    uint32_t i;
+    std::optional<bool> deleted;
+
+    InteriorNode *save = root_;
+    /*
+    save->latch_.lock_shared();
+    while (save != root_) {
+      save->latch_.unlock_shared();
+      save = root_;
+      save->latch_.lock_shared();
+    }
+
+    leaf = TraverseTrack(root_, k, nullptr);
+
+    i = FindKey(leaf, k);
+
+    deleted = TryDeleteLeaf(leaf, k, v, i);
+    leaf->latch_.unlock();
+    if(deleted.has_value()) {
+      // Successfully deleted without rebalancing!
+#ifdef DEEP_DEBUG
+      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+#endif
+      return deleted.value();
+    }*/
+
     std::vector<InteriorNode *> potential_changes;
     std::vector<uint32_t> indices;
     std::vector<InteriorNode *> left_siblings;
     std::vector<InteriorNode *> right_siblings;
 
-    InteriorNode *save = root_;
+    save = root_;
     save->latch_.lock();
     while (save != root_) {
       save->latch_.unlock();
@@ -1694,7 +1777,7 @@ class BPlusTree {
 
     leaf = TraverseTrackWithSiblings(root_, k, potential_changes, indices, left_siblings, right_siblings);
 
-    uint32_t i = FindKey(leaf, k);
+    i = FindKey(leaf, k);
 
     auto unlock_all = [&]() {
       if (leaf->prev_ != nullptr) {
@@ -1719,56 +1802,18 @@ class BPlusTree {
       }
     };
 
-    // Can't delete a key that doesn't exist in the tree
-    if (i >= leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) {
+    deleted = TryDeleteLeaf(leaf, k, v, i);
+
+    if(deleted.has_value()) {
       unlock_all();
 #ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
 #endif
-      return false;
+      return deleted.value();
     }
 
-    if (allow_duplicates_) {
-      if(value_eq_obj_(v, leaf->values_[i])) {
-        if(RemoveFromOverflow(&leaf->overflow_, k, nullptr, &leaf->values_[i])) {
-          // We found a matching key/value pair!
-          unlock_all();
-#ifdef DEEP_DEBUG
-          TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
-#endif
-          return true;
-        }
-        // We did not find a matching key/value pair so we must fully delete this version
-      } else {
-        ValueType ignore;
-        // Try to remove it from the overflow node.
-        bool result = RemoveFromOverflow(&leaf->overflow_, k, &v, &ignore);
-        unlock_all();
-#ifdef DEEP_DEBUG
-        TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
-#endif
-        return result;
-      }
-    } else if(!value_eq_obj_(v, leaf->values_[i])) {
-      unlock_all();
-#ifdef DEEP_DEBUG
-      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
-#endif
-      return false; // Can't delete a key that doesn't match the value :(
-    }
-
-    //At this point we are committed to deleting the key/value pair
+    // At this point we are committed to deleting the key/value pair
     RemoveFromNode(leaf, i);
-
-    if((depth_ == 1 && root_->filled_keys_ == 1) || leaf->filled_keys_ >= MIN_CHILDREN) {
-      // No rebalancing needed
-      unlock_all();
-#ifdef DEEP_DEBUG
-      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
-#endif
-
-      return true;
-    }
 
     LeafNode *borrowed_from;
     auto **parameter = reinterpret_cast<GenericNode<ValueType>**>(&borrowed_from);

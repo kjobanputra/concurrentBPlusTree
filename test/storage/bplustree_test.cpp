@@ -43,6 +43,9 @@ struct BPlusTreeTests : public TerrierTest {
 
   uint32_t CountValues(uint32_t key) {
     auto iter = bplustree_.BeginLessEqual(key);
+    while(!iter.Valid()) {
+      iter = bplustree_.BeginLessEqual(key);
+    }
     if (iter == bplustree_.end() || iter.Key() != key) {
       iter.ReleaseLock();
       return 0;
@@ -244,40 +247,57 @@ auto delete_get_value_test = [&]() {
  */
 auto insert_get_value_test = [&]() {
   for (uint32_t i = 0; i < basic_test_key_num * num_threads_; i++) {
-    EXPECT_EQ(CountValues(i), 4);
+    auto* UNUSED_ATTRIBUTE tree = &bplustree_;
+    TERRIER_ASSERT(CountValues(i) == 4, "");
   }
 };
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test2);
 
+printf("%d\n", __LINE__);
 insert_get_value_test();
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test1);
 
+printf("%d\n", __LINE__);
 delete_get_value_test();
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test1);
 
+printf("%d\n", __LINE__);
 insert_get_value_test();
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test2);
 
+printf("%d\n", __LINE__);
 delete_get_value_test();
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test1);
 
+printf("%d\n", __LINE__);
 insert_get_value_test();
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test1);
 
+printf("%d\n", __LINE__);
 delete_get_value_test();
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_test2);
 
+printf("%d\n", __LINE__);
 insert_get_value_test();
 
+printf("%d\n", __LINE__);
 MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_test2);
 
+printf("%d\n", __LINE__);
 delete_get_value_test();
 }
 
@@ -293,6 +313,7 @@ TEST_F(BPlusTreeTests, ScanDelete) {
    */
   auto insert_scan_delete = [&](uint32_t id) {
     for (uint32_t run = 0; run < num_insertions; run++) {
+      printf("Run: %d for thread %d\n", run, id);
       for (uint32_t i = 0; i < basic_test_key_num; i++) {
         bool result = bplustree_.Insert(i, id * basic_test_key_num + i, true);
         EXPECT_TRUE(result);
