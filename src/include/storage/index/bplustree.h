@@ -68,6 +68,11 @@ constexpr uint32_t NUM_CHILDREN = 5;
 constexpr uint32_t OVERFLOW_SIZE = 5;
 
 /**
+ * Length of time to try to increment before dying
+ */
+constexpr std::chrono::duration TIMEOUT = std::chrono::nanoseconds(100);
+
+/**
  * Minimum number of children an interior node is allowed to have
  * (equivalently, the minimum number of keys a leaf node is allowed to store)
  */
@@ -76,7 +81,7 @@ constexpr uint32_t MIN_CHILDREN = NUM_CHILDREN / 2 + NUM_CHILDREN % 2;
 enum class SiblingType { Left, Right, Neither };
 
 #ifndef NDEBUG
- class DebugLock : public std::shared_mutex
+ class DebugLock : public std::shared_timed_mutex
  {
   public:
    std::atomic<std::thread::id> holder_;
@@ -87,14 +92,14 @@ enum class SiblingType { Left, Right, Neither };
        StackTrace();
        TERRIER_ASSERT(false, "Should not lock twice!");
      }
-     std::shared_mutex::lock();
+     std::shared_timed_mutex::lock();
      holder_ = std::this_thread::get_id();
      size_ = backtrace(trace_, 10);
    }
 
    void unlock() {  // NOLINT for lock name compatibility
      holder_ = std::thread::id();
-     std::shared_mutex::unlock();
+     std::shared_timed_mutex::unlock();
    }
 
    void StackTrace() {
@@ -145,7 +150,7 @@ class BPlusTree {
 #ifndef NDEBUG
     mutable DebugLock latch_;
 #else
-    mutable std::shared_mutex latch_;
+    mutable std::shared_timed_mutex latch_;
 #endif
 
     friend class BPlusTree;
@@ -219,7 +224,7 @@ class BPlusTree {
     static LeafNode *CreateNew() {
       auto *node = reinterpret_cast<LeafNode *>(mem_pool.Allocate(sizeof(class LeafNode), true));
       // Initialize the shared mutex
-      new (&node->latch_) std::shared_mutex();
+      new (&node->latch_) std::shared_timed_mutex();
       return node;
     }
 
@@ -381,7 +386,7 @@ class BPlusTree {
     static InteriorNode *CreateNew() {
       auto *node = reinterpret_cast<InteriorNode *>(mem_pool.Allocate(sizeof(class InteriorNode), true));
       // Initialize the shared mutex
-      new (&node->latch_) std::shared_mutex();
+      new (&node->latch_) std::shared_timed_mutex();
       return node;
     }
 
@@ -858,11 +863,16 @@ class BPlusTree {
     const BPlusTree *tree_;
     LeafNode *current_;
     uint32_t index_;
+    bool valid_;
 
     KeyIterator(const BPlusTree *tree, LeafNode *current, uint32_t index)
-        : tree_(tree), current_(current), index_(index) {}
+        : tree_(tree), current_(current), index_(index), valid_(true) {}
 
    public:
+    bool Valid() const {
+      return valid_;
+    }
+
     /**
      * Gets the primary (first-inserted) value stored for this key.
      */
@@ -909,7 +919,12 @@ class BPlusTree {
       if (index_ >= current_->filled_keys_) {
         auto *next = current_->next_;
         if (next) {
-          next->latch_.lock_shared();
+          bool acquired = next->latch_.try_lock_shared_for(TIMEOUT);
+          if(!acquired) {
+            valid_ = false;
+            current_->latch_.unlock_shared();
+            return;
+          }
         }
         current_->latch_.unlock_shared();
         current_ = next;
@@ -938,7 +953,12 @@ class BPlusTree {
       if (index_ == 0) {
         auto *prev = current_->prev_;
         if (prev != nullptr) {
-          prev->latch_.lock_shared();
+          bool acquired = prev->latch_.try_lock_shared_for(TIMEOUT);
+          if(!acquired) {
+            valid_ = false;
+            current_->latch_.unlock_shared();
+            return;
+          }
         }
         current_->latch_.unlock_shared();
         current_ = prev;
@@ -1076,7 +1096,13 @@ class BPlusTree {
     // Key exists in the next node over
     LeafNode *next = leaf->next_;
     if (next) {
-      next->latch_.lock_shared();
+      bool acquired = next->latch_.try_lock_shared_for(TIMEOUT);
+      if(!acquired) {
+        KeyIterator result = {this, next, 0};
+        result.valid_ = false;
+        leaf->latch_.unlock_shared();
+        return result;
+      }
     }
     leaf->latch_.unlock_shared();
     return {this, next, 0};

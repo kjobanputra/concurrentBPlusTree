@@ -6,7 +6,7 @@
 
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_LEAVES = 25;
 constexpr uint32_t UNUSED_ATTRIBUTE NUM_KEYS_PER_LEAF = 4;
-constexpr uint32_t NUM_INSERTIONS = 30; //10000; // NUM_LEAVES*NUM_KEYS_PER_LEAF;
+constexpr uint32_t NUM_INSERTIONS = 10000; // NUM_LEAVES*NUM_KEYS_PER_LEAF;
 
 namespace terrier::storage::index {
 
@@ -162,7 +162,7 @@ TEST_F(BPlusTreeTests, DuplicateTests) {
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, Interleaved) {
-const uint32_t basic_test_key_num = 5; // * 1024;
+const uint32_t basic_test_key_num = 128 * 1024;
 
 common::WorkerPool thread_pool(num_threads_, {});
 thread_pool.Startup();
