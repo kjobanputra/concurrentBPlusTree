@@ -1025,6 +1025,11 @@ class BPlusTree {
     auto *leaf = current->Leaf(0);
     leaf->latch_.lock_shared();
     current->latch_.unlock_shared();
+    if (leaf->filled_keys_ == 0) {
+      // Special case: empty tree
+      leaf->latch_.unlock_shared();
+      return {this, nullptr, 0};
+    }
     return {this, leaf, 0};
   }
 

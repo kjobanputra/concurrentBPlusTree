@@ -281,4 +281,63 @@ MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, delete_te
 
 delete_get_value_test();
 }
+
+TEST_F(BPlusTreeTests, ScanDelete) {
+  const uint32_t basic_test_key_num = 5 * 1024;
+  const uint32_t num_insertions = 5;
+
+  common::WorkerPool thread_pool(num_threads_, {});
+  thread_pool.Startup();
+
+  /*
+   * insert_scan_delete() - Each threads inserts, scans, and deletes a bunch of keys
+   */
+  auto insert_scan_delete = [&](uint32_t id) {
+    for (uint32_t run = 0; run < num_insertions; run++) {
+      for (uint32_t i = 0; i < basic_test_key_num; i++) {
+        bool result = bplustree_.Insert(i, id * basic_test_key_num + i, true);
+        EXPECT_TRUE(result);
+      }
+      auto scan_itr = bplustree_.begin();
+      while (scan_itr != bplustree_.end()) {
+        uint32_t key = scan_itr.Key();
+        uint32_t target_value = id * basic_test_key_num + key;
+        uint32_t count = 0;
+        if (scan_itr.Value() == target_value) {
+          count++;
+        }
+        for (auto &value : scan_itr) {
+          if (value == target_value) {
+            count++;
+          }
+        }
+        EXPECT_EQ(count, 1);
+        ++scan_itr;
+      }
+      for (uint32_t i = 0; i < basic_test_key_num; i++) {
+        bool result = bplustree_.Delete(i, id * basic_test_key_num + i);
+        EXPECT_TRUE(result);
+      }
+      scan_itr = bplustree_.begin();
+      while (scan_itr != bplustree_.end()) {
+        uint32_t key = scan_itr.Key();
+        uint32_t target_value = id * basic_test_key_num + key;
+        uint32_t count = 0;
+        if (scan_itr.Value() == target_value) {
+          count++;
+        }
+        for (auto &value : scan_itr) {
+          if (value == target_value) {
+            count++;
+          }
+        }
+        EXPECT_EQ(count, 0);
+        ++scan_itr;
+      }
+    }
+  };
+
+  MultiThreadTestUtil::RunThreadsUntilFinish(&thread_pool, num_threads_, insert_scan_delete);
+}
+
 }  // namespace terrier::storage::index
