@@ -1369,10 +1369,10 @@ class BPlusTree {
 
   // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
   LeafNode *TraverseTrackWithSiblings(InteriorNode *root, KeyType k, std::vector<InteriorNode *> &potential_changes,
-                                      std::vector<uint32_t> &indices, std::vector<InteriorNode *> &left_siblings,
+                                      std::vector<uint32_t> *indices, std::vector<InteriorNode *> &left_siblings,
                                       std::vector<InteriorNode *> &right_siblings) {
     potential_changes.reserve(depth_);
-    indices.reserve(depth_);
+    indices->reserve(depth_);
     left_siblings.reserve(depth_);
     right_siblings.reserve(depth_);
 
@@ -1402,12 +1402,12 @@ class BPlusTree {
         potential_changes.erase(potential_changes.begin(), potential_changes.end());
         left_siblings.erase(left_siblings.begin(), left_siblings.end());
         right_siblings.erase(right_siblings.begin(), right_siblings.end());
-        indices.erase(indices.begin(), indices.end());
+        indices->erase(indices->begin(), indices->end());
       }
 
       // Index in potential_changes.end() that will get you to next child
       i = FindKey(current, k) - 1;
-      indices.push_back(i);
+      indices->push_back(i);
       left_siblings.push_back(left);
       right_siblings.push_back(right);
       potential_changes.push_back(current);
@@ -1449,7 +1449,7 @@ class BPlusTree {
 
   bool RemoveFromOverflow(OverflowNode **overflow, KeyType k, ValueType *v, ValueType *result) {
     OverflowNode *current = *overflow;
-    OverflowNode **prevNext = overflow;
+    OverflowNode **prev_next = overflow;
     OverflowNode *prev = nullptr;
     bool deleted = false;
     uint32_t i = 0;
@@ -1465,7 +1465,7 @@ class BPlusTree {
       if (i < current->filled_keys_) {
         break;
       }
-      prevNext = &(current->next_);
+      prev_next = &(current->next_);
       prev = current;
       current = current->next_;
     }
@@ -1474,14 +1474,14 @@ class BPlusTree {
       TERRIER_ASSERT(current != nullptr, "Should have a node");
       OverflowNode *hole = current;
       while (current->next_ != nullptr) {
-        prevNext = &(current->next_);
+        prev_next = &(current->next_);
         prev = current;
         current = current->next_;
       }
 
       // This shouldn't happen, but sometimes we don't delete nodes we should... this will clean that up
       if (current->filled_keys_ == 0) {
-        *prevNext = current->next_;
+        *prev_next = current->next_;
         OverflowNode::Delete(current);
         TERRIER_ASSERT(prev != nullptr, "Must have at least one overflow");
         current = prev;
@@ -1494,7 +1494,7 @@ class BPlusTree {
       current->filled_keys_--;
       if (current->filled_keys_ == 0) {
         OverflowNode::Delete(current);
-        *prevNext = nullptr;
+        *prev_next = nullptr;
       }
     }
 
@@ -1624,32 +1624,31 @@ class BPlusTree {
         TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
-      } else {
-        // Merge case
-        TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-        // NB: using int64_t here in order to allow for natural semantics for a decreasing for loop
-        for (int64_t i = right->filled_keys_ - 1; i >= 0; i--) {
-          right->keys_[i + node->filled_keys_] = right->keys_[i];
-          right->values_[i + node->filled_keys_] = right->values_[i];
-        }
-
-        if (start == 1) {
-          right->keys_[node->filled_keys_] = parent->keys_[index + 1];
-        }
-        right->filled_keys_ += node->filled_keys_;
-        TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-
-        for (uint32_t i = 0; i < node->filled_keys_; i++) {
-          right->keys_[i] = node->keys_[i];
-          right->values_[i] = node->values_[i];
-        }
-
-        // Cut the middleman out
-        parent->values_[index].as_interior_ = reinterpret_cast<InteriorNode *>(right);
-        TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-        TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-        return right;
       }
+      // Merge case
+      TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+      // NB: using int64_t here in order to allow for natural semantics for a decreasing for loop
+      for (int64_t i = right->filled_keys_ - 1; i >= 0; i--) {
+        right->keys_[i + node->filled_keys_] = right->keys_[i];
+        right->values_[i + node->filled_keys_] = right->values_[i];
+      }
+
+      if (start == 1) {
+        right->keys_[node->filled_keys_] = parent->keys_[index + 1];
+      }
+      right->filled_keys_ += node->filled_keys_;
+      TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+
+      for (uint32_t i = 0; i < node->filled_keys_; i++) {
+        right->keys_[i] = node->keys_[i];
+        right->values_[i] = node->values_[i];
+      }
+
+      // Cut the middleman out
+      parent->values_[index].as_interior_ = reinterpret_cast<InteriorNode *>(right);
+      TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+      TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+      return right;
     } else {
       TERRIER_ASSERT(left != nullptr, "Can't have an empty left if we're not deleting at index 0!");
       uint32_t size = left->filled_keys_;
@@ -1672,23 +1671,22 @@ class BPlusTree {
         TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return nullptr;
-      } else {
-        // Merge Case
-        uint32_t orig_size = left->filled_keys_;
-        for (uint32_t i = 0; i < node->filled_keys_; i++) {
-          left->keys_[left->filled_keys_] = node->keys_[i];
-          left->values_[left->filled_keys_] = node->values_[i];
-          left->filled_keys_++;
-        }
-
-        if (start == 1) {
-          left->keys_[orig_size] = parent->keys_[index];
-        }
-
-        TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-        TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-        return left;
       }
+      // Merge Case
+      uint32_t orig_size = left->filled_keys_;
+      for (uint32_t i = 0; i < node->filled_keys_; i++) {
+        left->keys_[left->filled_keys_] = node->keys_[i];
+        left->values_[left->filled_keys_] = node->values_[i];
+        left->filled_keys_++;
+      }
+
+      if (start == 1) {
+        left->keys_[orig_size] = parent->keys_[index];
+      }
+
+      TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+      TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+      return left;
     }
   }
 
@@ -1768,7 +1766,7 @@ class BPlusTree {
       save->latch_.lock();
     }
 
-    leaf = TraverseTrackWithSiblings(root_, k, potential_changes, indices, left_siblings, right_siblings);
+    leaf = TraverseTrackWithSiblings(root_, k, potential_changes, &indices, left_siblings, right_siblings);
 
     i = FindKey(leaf, k);
 
@@ -1862,7 +1860,7 @@ class BPlusTree {
 
       RemoveFromNode(current, i);
       GenericNode<Child> **unused = nullptr;
-      InteriorNode *preserved_interior = reinterpret_cast<InteriorNode *>(
+      auto *preserved_interior = reinterpret_cast<InteriorNode *>(
           Rebalance(current, left, right, 1, potential_changes.back(), indices.back(), nullptr, unused));
       if (preserved_interior == nullptr) {
         current->latch_.unlock();
