@@ -923,7 +923,7 @@ class BPlusTree {
           if(!acquired) {
             valid_ = false;
             current_->latch_.unlock_shared();
-            return;
+            return *this;
           }
         }
         current_->latch_.unlock_shared();
@@ -957,7 +957,7 @@ class BPlusTree {
           if(!acquired) {
             valid_ = false;
             current_->latch_.unlock_shared();
-            return;
+            return *this;
           }
         }
         current_->latch_.unlock_shared();

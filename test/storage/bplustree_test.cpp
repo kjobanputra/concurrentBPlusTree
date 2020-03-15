@@ -162,7 +162,7 @@ TEST_F(BPlusTreeTests, DuplicateTests) {
  */
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, Interleaved) {
-const uint32_t basic_test_key_num = 128 * 1024;
+const uint32_t basic_test_key_num = 1024;
 
 common::WorkerPool thread_pool(num_threads_, {});
 thread_pool.Startup();
