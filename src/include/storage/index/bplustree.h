@@ -1,8 +1,8 @@
 #pragma once
 
+#include <execinfo.h>
 #include <execution/sql/memory_pool.h>
 #include <loggers/index_logger.h>
-#include <execinfo.h>
 
 #include <functional>
 #include <queue>
@@ -81,58 +81,55 @@ constexpr uint32_t MIN_CHILDREN = NUM_CHILDREN / 2 + NUM_CHILDREN % 2;
 enum class SiblingType { Left, Right, Neither };
 
 #ifndef NDEBUG
-class DebugLock : public std::shared_timed_mutex
-{
+class DebugLock : public std::shared_timed_mutex {
  public:
-    std::atomic<std::thread::id> holder_;
-    std::atomic<uint32_t> shared_holders_;
+  std::atomic<std::thread::id> holder_;
+  std::atomic<uint32_t> shared_holders_;
 
-    void *trace_[10];
-    std::atomic<size_t> size_;
-    void lock_shared() { // NOLINT for name compatibility
-     std::shared_timed_mutex::lock_shared();
-     TERRIER_ASSERT(holder_ == std::thread::id(), "No thread should be a writer");
-     shared_holders_++;
-    }
+  void *trace_[10];
+  std::atomic<size_t> size_;
+  void lock_shared() {  // NOLINT for name compatibility
+    std::shared_timed_mutex::lock_shared();
+    TERRIER_ASSERT(holder_ == std::thread::id(), "No thread should be a writer");
+    shared_holders_++;
+  }
 
-    template <typename R, typename P>
-    bool try_lock_shared_for(const std::chrono::duration<R, P> &duration) { // NOLINT for name compatibility
-     bool result = std::shared_timed_mutex::try_lock_shared_for(duration);
-     if(result) {
-       TERRIER_ASSERT(holder_ == std::thread::id(), "No thread should be a writer");
-       shared_holders_++;
-     }
-     return result;
+  template <typename R, typename P>
+  bool try_lock_shared_for(const std::chrono::duration<R, P> &duration) {  // NOLINT for name compatibility
+    bool result = std::shared_timed_mutex::try_lock_shared_for(duration);
+    if (result) {
+      TERRIER_ASSERT(holder_ == std::thread::id(), "No thread should be a writer");
+      shared_holders_++;
     }
+    return result;
+  }
 
-    void unlock_shared() { // NOLINT for name compatibility
-     TERRIER_ASSERT(shared_holders_ > 0, "Must have at least one reader");
-     shared_holders_--;
-     std::shared_timed_mutex::unlock_shared();
-    }
+  void unlock_shared() {  // NOLINT for name compatibility
+    TERRIER_ASSERT(shared_holders_ > 0, "Must have at least one reader");
+    shared_holders_--;
+    std::shared_timed_mutex::unlock_shared();
+  }
 
-    void lock() {  // NOLINT for lock name compatibility
-     if (holder_ == std::this_thread::get_id()) {
-       StackTrace();
-       TERRIER_ASSERT(false, "Should not lock twice!");
-     }
-     std::shared_timed_mutex::lock();
-     TERRIER_ASSERT(shared_holders_ == 0, "Should be no readers now");
-     holder_ = std::this_thread::get_id();
-     size_ = backtrace(trace_, 10);
+  void lock() {  // NOLINT for lock name compatibility
+    if (holder_ == std::this_thread::get_id()) {
+      StackTrace();
+      TERRIER_ASSERT(false, "Should not lock twice!");
     }
+    std::shared_timed_mutex::lock();
+    TERRIER_ASSERT(shared_holders_ == 0, "Should be no readers now");
+    holder_ = std::this_thread::get_id();
+    size_ = backtrace(trace_, 10);
+  }
 
-    void unlock() {  // NOLINT for lock name compatibility
-     TERRIER_ASSERT(holder_ == std::this_thread::get_id(), "Should only unlock from the current thread");
-     holder_ = std::thread::id();
-     std::shared_timed_mutex::unlock();
-    }
+  void unlock() {  // NOLINT for lock name compatibility
+    TERRIER_ASSERT(holder_ == std::this_thread::get_id(), "Should only unlock from the current thread");
+    holder_ = std::thread::id();
+    std::shared_timed_mutex::unlock();
+  }
 
-    void StackTrace() {
-     backtrace_symbols_fd(trace_, size_, STDERR_FILENO);
-    }
+  void StackTrace() { backtrace_symbols_fd(trace_, size_, STDERR_FILENO); }
 };
-#endif // NDEBUG
+#endif  // NDEBUG
 
 template <typename KeyType, typename ValueType, typename KeyComparator = std::less<KeyType>,
           typename KeyEqualityChecker = std::equal_to<KeyType>, typename KeyHashFunc = std::hash<KeyType>,
@@ -354,15 +351,15 @@ class BPlusTree {
       for (uint32_t i = 1; i < this->filled_keys_; i++) {
         if (leaf_children_) {
           auto leaf = Leaf(i);
-          auto prev_leaf = Leaf(i-1);
+          auto prev_leaf = Leaf(i - 1);
           CHECK(parent->KeyCmpLessEqual(this->keys_[i], leaf->keys_[0]));
           CHECK(parent->KeyCmpLessEqual(prev_leaf->keys_[prev_leaf->filled_keys_ - 1], this->keys_[i]));
         } else {
           auto interior = Interior(i);
-          while(!interior->leaf_children_) {
+          while (!interior->leaf_children_) {
             interior = interior->Interior(0);
           }
-          auto prev_interior = Interior(i-1);
+          auto prev_interior = Interior(i - 1);
           CHECK(parent->KeyCmpLessEqual(this->keys_[i], interior->Leaf(0)->keys_[0]));
           CHECK(parent->KeyCmpLessEqual(prev_interior->keys_[prev_interior->filled_keys_ - 1], this->keys_[i]));
         }
@@ -567,13 +564,13 @@ class BPlusTree {
       // then we don't need to keep track of anything above us
       if (potential_changes != nullptr && current->filled_keys_ < NUM_CHILDREN) {
         for (const auto &interior : *potential_changes) {
-            interior->latch_.unlock();
+          interior->latch_.unlock();
         }
         potential_changes->erase(potential_changes->begin(), potential_changes->end());
       }
 
       // However, the level below us may still split, so we may still change. Keep track of that
-      if(potential_changes != nullptr) {
+      if (potential_changes != nullptr) {
         potential_changes->push_back(current);
       }
 
@@ -583,21 +580,21 @@ class BPlusTree {
       if (current->leaf_children_) {
         leaf = current->Leaf(i);
         leaf->latch_.lock();
-        if(potential_changes == nullptr) {
+        if (potential_changes == nullptr) {
           current->latch_.unlock_shared();
         }
         TERRIER_ASSERT(leaf != nullptr, "Leaves should not be null!!");
       } else {
         InteriorNode *prev = current;
         current = current->Interior(i);
-        if(potential_changes == nullptr) {
+        if (potential_changes == nullptr) {
           current->latch_.lock_shared();
           prev->latch_.unlock_shared();
         } else {
           current->latch_.lock();
         }
       }
-      //cur_depth++;
+      // cur_depth++;
     }
 
     // If the leaf definitely has enough room, then we don't need to split anything!
@@ -733,7 +730,8 @@ class BPlusTree {
   KeyType SplitInterior(InteriorNode *from, InteriorNode *to, KeyType guide_post, InteriorNode *child) {
     // Find out where to insert this node
     uint32_t i = FindKey(from, guide_post);
-    TERRIER_ASSERT(i >= from->filled_keys_ || !KeyCmpEqual(guide_post, from->keys_[i]), "We should not have duplicated guide posts!");
+    TERRIER_ASSERT(i >= from->filled_keys_ || !KeyCmpEqual(guide_post, from->keys_[i]),
+                   "We should not have duplicated guide posts!");
 
     // Perform the insert
     to->filled_keys_ = 1;
@@ -922,9 +920,7 @@ class BPlusTree {
         : tree_(tree), current_(current), index_(index), valid_(true) {}
 
    public:
-    bool Valid() const {
-      return valid_;
-    }
+    bool Valid() const { return valid_; }
 
     /**
      * Gets the primary (first-inserted) value stored for this key.
@@ -973,7 +969,7 @@ class BPlusTree {
         auto *next = current_->next_;
         if (next) {
           bool acquired = next->latch_.try_lock_shared_for(TIMEOUT);
-          if(!acquired) {
+          if (!acquired) {
             valid_ = false;
             current_->latch_.unlock_shared();
             return *this;
@@ -1007,7 +1003,7 @@ class BPlusTree {
         auto *prev = current_->prev_;
         if (prev != nullptr) {
           bool acquired = prev->latch_.try_lock_shared_for(TIMEOUT);
-          if(!acquired) {
+          if (!acquired) {
             valid_ = false;
             current_->latch_.unlock_shared();
             return *this;
@@ -1015,7 +1011,7 @@ class BPlusTree {
         }
         current_->latch_.unlock_shared();
         current_ = prev;
-        if(current_ != nullptr) {
+        if (current_ != nullptr) {
           index_ = current_->filled_keys_ - 1;
         }
       } else {
@@ -1154,7 +1150,7 @@ class BPlusTree {
     LeafNode *next = leaf->next_;
     if (next) {
       bool acquired = next->latch_.try_lock_shared_for(TIMEOUT);
-      if(!acquired) {
+      if (!acquired) {
         KeyIterator result = {this, next, 0};
         result.valid_ = false;
         leaf->latch_.unlock_shared();
@@ -1217,8 +1213,9 @@ class BPlusTree {
     return {this, nullptr, 0};
   }
 
-  bool Insert(KeyType k, ValueType v, bool allow_duplicates = true, const std::function<bool(const ValueType &)> &predicate = [](ValueType v){ return false; }) {
-
+  bool Insert(
+      KeyType k, ValueType v, bool allow_duplicates = true,
+      const std::function<bool(const ValueType &)> &predicate = [](ValueType v) { return false; }) {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "Insert must be called on a valid B+ Tree");
 #endif
@@ -1238,7 +1235,7 @@ class BPlusTree {
     uint32_t i = FindKey(leaf, k);
 
     std::vector<InteriorNode *> potential_changes;  // Mark the interior nodes that may be split
-    if((i == leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) && leaf->filled_keys_ == NUM_CHILDREN) {
+    if ((i == leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) && leaf->filled_keys_ == NUM_CHILDREN) {
       leaf->latch_.unlock();
       // We will need to split. guess optimism was not good enough :(
       potential_changes.reserve(depth_);
@@ -1328,7 +1325,8 @@ class BPlusTree {
       if ((*inner)->filled_keys_ < NUM_CHILDREN) {
         // Yes! Just insert!
         i = FindKey(*inner, guide_post);
-        TERRIER_ASSERT(i >= (*inner)->filled_keys_ || !KeyCmpEqual(guide_post, (*inner)->keys_[i]), "We should not have duplicated guide posts!");
+        TERRIER_ASSERT(i >= (*inner)->filled_keys_ || !KeyCmpEqual(guide_post, (*inner)->keys_[i]),
+                       "We should not have duplicated guide posts!");
 
         InsertIntoNode(*inner, i, guide_post, to_insert);
         (*inner)->latch_.unlock();
@@ -1342,7 +1340,7 @@ class BPlusTree {
         guide_post = SplitInterior(*inner, new_inner, guide_post, to_insert.as_interior_);
 
         auto *new_left = InteriorNode::CreateNew();
-        for(int j = 0; j < root_->filled_keys_; j++) {
+        for (int j = 0; j < root_->filled_keys_; j++) {
           new_left->keys_[j] = root_->keys_[j];
           new_left->values_[j] = root_->values_[j];
         }
@@ -1370,11 +1368,8 @@ class BPlusTree {
   }
 
   // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
-  LeafNode *TraverseTrackWithSiblings(InteriorNode *root,
-                                      KeyType k,
-                                      std::vector<InteriorNode *> &potential_changes,
-                                      std::vector<uint32_t> &indices,
-                                      std::vector<InteriorNode *> &left_siblings,
+  LeafNode *TraverseTrackWithSiblings(InteriorNode *root, KeyType k, std::vector<InteriorNode *> &potential_changes,
+                                      std::vector<uint32_t> &indices, std::vector<InteriorNode *> &left_siblings,
                                       std::vector<InteriorNode *> &right_siblings) {
     potential_changes.reserve(depth_);
     indices.reserve(depth_);
@@ -1428,15 +1423,15 @@ class BPlusTree {
           leaf->next_->latch_.lock();
         }
       } else {
-        if(i == 0 && left != nullptr) {
+        if (i == 0 && left != nullptr) {
           left = left->Interior(left->filled_keys_ - 1);
           left->latch_.lock();
-        } else if(i != 0) {
+        } else if (i != 0) {
           left = current->Interior(i - 1);
           left->latch_.lock();
         }
 
-        if(i == current->filled_keys_ - 1 && right != nullptr) {
+        if (i == current->filled_keys_ - 1 && right != nullptr) {
           right = right->Interior(0);
           right->latch_.lock();
         } else if (i != current->filled_keys_ - 1) {
@@ -1460,8 +1455,8 @@ class BPlusTree {
     uint32_t i = 0;
 
     while (current != nullptr) {
-      for(i = 0; i < current->filled_keys_; i++) {
-        if(KeyCmpEqual(k, current->keys_[i]) && (v == nullptr || value_eq_obj_(*v, current->values_[i]))) {
+      for (i = 0; i < current->filled_keys_; i++) {
+        if (KeyCmpEqual(k, current->keys_[i]) && (v == nullptr || value_eq_obj_(*v, current->values_[i]))) {
           *result = current->values_[i];
           deleted = true;
           break;
@@ -1507,7 +1502,7 @@ class BPlusTree {
   }
 
   void MergeOverflow(OverflowNode **pointer, OverflowNode *other) {
-    if (other == nullptr) return; // No merging
+    if (other == nullptr) return;  // No merging
 
     OverflowNode *last = nullptr;
     if (*pointer != nullptr) {
@@ -1543,7 +1538,7 @@ class BPlusTree {
 
   void StealOverflow(OverflowNode **pointer, OverflowNode *other, KeyType key) {
     if (other == nullptr) {
-      return; // Nothing to steal!
+      return;  // Nothing to steal!
     }
     // Check if current node is full
     while (*pointer != nullptr && (*pointer)->filled_keys_ == OVERFLOW_SIZE) {
@@ -1597,7 +1592,7 @@ class BPlusTree {
   template <typename Value>
   void RemoveFromNode(GenericNode<Value> *node, uint32_t index) {
     TERRIER_ASSERT(index < node->filled_keys_, "Not a valid index for removal!");
-    for(uint32_t j = index + 1; j < node->filled_keys_; j++) {
+    for (uint32_t j = index + 1; j < node->filled_keys_; j++) {
       node->keys_[j - 1] = node->keys_[j];
       node->values_[j - 1] = node->values_[j];
     }
@@ -1605,20 +1600,15 @@ class BPlusTree {
   }
 
   template <typename Value>
-  GenericNode<Value> *Rebalance(GenericNode<Value> *node,
-                                GenericNode<Value> *left,
-                                GenericNode<Value> *right,
-                                uint32_t start,
-                                InteriorNode *parent,
-                                uint32_t index,
-                                KeyType *borrowed_key,
+  GenericNode<Value> *Rebalance(GenericNode<Value> *node, GenericNode<Value> *left, GenericNode<Value> *right,
+                                uint32_t start, InteriorNode *parent, uint32_t index, KeyType *borrowed_key,
                                 GenericNode<Value> **borrowed_from) {
     TERRIER_ASSERT(node->filled_keys_ < MIN_CHILDREN, "Rebalance should be called on an unbalanced node!");
 
-    if(index == 0) { // 1 is the minimum index
+    if (index == 0) {  // 1 is the minimum index
       TERRIER_ASSERT(right != nullptr, "Can't have an empty right if we're deleting at index 0!");
       uint32_t size = right->filled_keys_;
-      if(size > MIN_CHILDREN) {
+      if (size > MIN_CHILDREN) {
         // Borrow case
         KeyType k_insert = start == 0 ? right->keys_[0] : parent->keys_[index + 1];
         parent->keys_[index + 1] = right->keys_[1];
@@ -1638,24 +1628,24 @@ class BPlusTree {
         // Merge case
         TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         // NB: using int64_t here in order to allow for natural semantics for a decreasing for loop
-        for(int64_t i = right->filled_keys_ - 1; i >= 0; i--) {
+        for (int64_t i = right->filled_keys_ - 1; i >= 0; i--) {
           right->keys_[i + node->filled_keys_] = right->keys_[i];
           right->values_[i + node->filled_keys_] = right->values_[i];
         }
 
-        if(start == 1) {
+        if (start == 1) {
           right->keys_[node->filled_keys_] = parent->keys_[index + 1];
         }
         right->filled_keys_ += node->filled_keys_;
         TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
 
-        for(uint32_t i = 0; i < node->filled_keys_; i++) {
+        for (uint32_t i = 0; i < node->filled_keys_; i++) {
           right->keys_[i] = node->keys_[i];
           right->values_[i] = node->values_[i];
         }
 
         // Cut the middleman out
-        parent->values_[index].as_interior_ = reinterpret_cast<InteriorNode*>(right);
+        parent->values_[index].as_interior_ = reinterpret_cast<InteriorNode *>(right);
         TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
         return right;
@@ -1663,7 +1653,7 @@ class BPlusTree {
     } else {
       TERRIER_ASSERT(left != nullptr, "Can't have an empty left if we're not deleting at index 0!");
       uint32_t size = left->filled_keys_;
-      if(size > MIN_CHILDREN) {
+      if (size > MIN_CHILDREN) {
         // Borrow case
         auto key = left->keys_[size - 1];
         if (start == 1) {
@@ -1685,13 +1675,13 @@ class BPlusTree {
       } else {
         // Merge Case
         uint32_t orig_size = left->filled_keys_;
-        for(uint32_t i = 0; i < node->filled_keys_; i++) {
+        for (uint32_t i = 0; i < node->filled_keys_; i++) {
           left->keys_[left->filled_keys_] = node->keys_[i];
           left->values_[left->filled_keys_] = node->values_[i];
           left->filled_keys_++;
         }
 
-        if(start == 1) {
+        if (start == 1) {
           left->keys_[orig_size] = parent->keys_[index];
         }
 
@@ -1709,8 +1699,8 @@ class BPlusTree {
     }
 
     if (allow_duplicates_) {
-      if(value_eq_obj_(v, leaf->values_[i])) {
-        if(RemoveFromOverflow(&leaf->overflow_, k, nullptr, &leaf->values_[i])) {
+      if (value_eq_obj_(v, leaf->values_[i])) {
+        if (RemoveFromOverflow(&leaf->overflow_, k, nullptr, &leaf->values_[i])) {
           // We found a matching key/value pair!
           return std::make_optional(true);
         }
@@ -1721,12 +1711,11 @@ class BPlusTree {
         bool result = RemoveFromOverflow(&leaf->overflow_, k, &v, &ignore);
         return std::make_optional(result);
       }
-    } else if(!value_eq_obj_(v, leaf->values_[i])) {
-      return std::make_optional(false); // Can't delete a key that doesn't match the value :(
+    } else if (!value_eq_obj_(v, leaf->values_[i])) {
+      return std::make_optional(false);  // Can't delete a key that doesn't match the value :(
     }
 
-
-    if((depth_ == 1 && root_->filled_keys_ == 1) || leaf->filled_keys_ > MIN_CHILDREN) {
+    if ((depth_ == 1 && root_->filled_keys_ == 1) || leaf->filled_keys_ > MIN_CHILDREN) {
       // No rebalancing needed
       RemoveFromNode(leaf, i);
       return std::make_optional(true);
@@ -1809,7 +1798,7 @@ class BPlusTree {
 
     deleted = TryDeleteLeaf(leaf, k, v, i);
 
-    if(deleted.has_value()) {
+    if (deleted.has_value()) {
       unlock_all();
 #ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
@@ -1821,18 +1810,17 @@ class BPlusTree {
     RemoveFromNode(leaf, i);
 
     LeafNode *borrowed_from;
-    auto **parameter = reinterpret_cast<GenericNode<ValueType>**>(&borrowed_from);
+    auto **parameter = reinterpret_cast<GenericNode<ValueType> **>(&borrowed_from);
     KeyType borrowed_key;
-    auto *preserved =
-        reinterpret_cast<LeafNode*>(Rebalance(leaf, leaf->prev_, leaf->next_, 0, potential_changes.back(),
-            indices.back(), &borrowed_key, parameter));
-    if(preserved == nullptr) {
+    auto *preserved = reinterpret_cast<LeafNode *>(Rebalance(
+        leaf, leaf->prev_, leaf->next_, 0, potential_changes.back(), indices.back(), &borrowed_key, parameter));
+    if (preserved == nullptr) {
       StealOverflow(&leaf->overflow_, borrowed_from->overflow_, borrowed_key);
       unlock_all();
 #ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
 #endif
-      return true; // No further rebalancing needed
+      return true;  // No further rebalancing needed
     }
 
     TERRIER_ASSERT(preserved == leaf->prev_ || preserved == leaf->next_, "We always merge into leaf");
@@ -1840,16 +1828,16 @@ class BPlusTree {
     // Merge our overflow into the preserved leaf
     MergeOverflow(&preserved->overflow_, leaf->overflow_);
 
-    if(leaf->prev_ != nullptr) {
+    if (leaf->prev_ != nullptr) {
       leaf->prev_->next_ = leaf->next_;
       leaf->prev_->latch_.unlock();
     }
-    if(leaf->next_ != nullptr) {
+    if (leaf->next_ != nullptr) {
       leaf->next_->prev_ = leaf->prev_;
       leaf->next_->latch_.unlock();
     }
 
-    if(preserved == leaf->prev_) {
+    if (preserved == leaf->prev_) {
       i = indices.back();
       indices.pop_back();
     } else {
@@ -1864,7 +1852,7 @@ class BPlusTree {
     InteriorNode *left;
     InteriorNode *right;
 
-    while(potential_changes.size() > 1) {
+    while (potential_changes.size() > 1) {
       current = potential_changes.back();
       left = left_siblings.back();
       right = right_siblings.back();
@@ -1911,7 +1899,7 @@ class BPlusTree {
         TERRIER_ASSERT(i < potential_changes.back()->filled_keys_, "i should always be a valid spot!");
       }
       TERRIER_ASSERT(potential_changes.back()->latch_.holder_ == std::this_thread::get_id(),
-          "Lock should be held on parent for deletion");
+                     "Lock should be held on parent for deletion");
       InteriorNode::Delete(current);
 
       // Unlock left/right latches
@@ -1940,7 +1928,7 @@ class BPlusTree {
     }
     RemoveFromNode(current, i);
 
-    if(current->filled_keys_ >= MIN_CHILDREN) {
+    if (current->filled_keys_ >= MIN_CHILDREN) {
       current->latch_.unlock();
 #ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
@@ -1950,10 +1938,10 @@ class BPlusTree {
 
     TERRIER_ASSERT(current == root_, "Only root can be less than half full at this point");
 
-    if(current->filled_keys_ == 1 && depth_ > 1) {
+    if (current->filled_keys_ == 1 && depth_ > 1) {
       --depth_;
       InteriorNode *interior = root_->Interior(0);
-      for(uint32_t j = 0; j < interior->filled_keys_; j++) {
+      for (uint32_t j = 0; j < interior->filled_keys_; j++) {
         root_->keys_[j] = interior->keys_[j];
         root_->values_[j] = interior->values_[j];
       }
@@ -1966,7 +1954,7 @@ class BPlusTree {
     }
 
 #ifdef DEEP_DEBUG
-      TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
+    TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
 #endif
     return true;
   }

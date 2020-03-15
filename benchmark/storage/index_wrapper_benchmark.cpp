@@ -209,20 +209,19 @@ BENCHMARK_DEFINE_F(IndexBenchmark, BwTreeIndexRandomScanKey)(benchmark::State &s
   state.SetItemsProcessed(state.iterations() * table_size_);
 }
 
-
 // Determine required time to run insert with BwTree structure for index
 // NOLINTNEXTLINE
 BENCHMARK_DEFINE_F(IndexBenchmark, BwTreeIndexInsert)(benchmark::State &state) {
-// Create index using BwTree and populate associated table
-// NOLINTNEXTLINE
-for (auto _ : state) {
-CreateIndex(storage::index::IndexType::BWTREE);
-// Run key lookup and record amount of time required in seconds
-const auto total_ns = RunInsertWorkload();
-state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
-}
-// Determine total number of items processed
-state.SetItemsProcessed(state.iterations() * table_size_);
+  // Create index using BwTree and populate associated table
+  // NOLINTNEXTLINE
+  for (auto _ : state) {
+    CreateIndex(storage::index::IndexType::BWTREE);
+    // Run key lookup and record amount of time required in seconds
+    const auto total_ns = RunInsertWorkload();
+    state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+  }
+  // Determine total number of items processed
+  state.SetItemsProcessed(state.iterations() * table_size_);
 }
 
 // Determine required time to run key lookup with HashMap structure for index
@@ -243,18 +242,17 @@ BENCHMARK_DEFINE_F(IndexBenchmark, HashIndexRandomScanKey)(benchmark::State &sta
 // Determine required time to run insert with BwTree structure for index
 // NOLINTNEXTLINE
 BENCHMARK_DEFINE_F(IndexBenchmark, HashIndexInsert)(benchmark::State &state) {
-// Create index using BwTree and populate associated table
-// NOLINTNEXTLINE
-for (auto _ : state) {
-CreateIndex(storage::index::IndexType::HASHMAP);
-// Run key lookup and record amount of time required in seconds
-const auto total_ns = RunInsertWorkload();
-state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+  // Create index using BwTree and populate associated table
+  // NOLINTNEXTLINE
+  for (auto _ : state) {
+    CreateIndex(storage::index::IndexType::HASHMAP);
+    // Run key lookup and record amount of time required in seconds
+    const auto total_ns = RunInsertWorkload();
+    state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+  }
+  // Determine total number of items processed
+  state.SetItemsProcessed(state.iterations() * table_size_);
 }
-// Determine total number of items processed
-state.SetItemsProcessed(state.iterations() * table_size_);
-}
-
 
 // Determine required time to run key lookup with BwTree structure for index
 // NOLINTNEXTLINE
@@ -272,23 +270,20 @@ BENCHMARK_DEFINE_F(IndexBenchmark, BPlusTreeIndexRandomScanKey)(benchmark::State
   state.SetItemsProcessed(state.iterations() * table_size_);
 }
 
-
-
 // Determine required time to run insert with BwTree structure for index
 // NOLINTNEXTLINE
 BENCHMARK_DEFINE_F(IndexBenchmark, BPlusTreeIndexInsert)(benchmark::State &state) {
-// Create index using BwTree and populate associated table
-// NOLINTNEXTLINE
-for (auto _ : state) {
-CreateIndex(storage::index::IndexType::BPLUSTREE);
-// Run key lookup and record amount of time required in seconds
-const auto total_ns = RunInsertWorkload();
-state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+  // Create index using BwTree and populate associated table
+  // NOLINTNEXTLINE
+  for (auto _ : state) {
+    CreateIndex(storage::index::IndexType::BPLUSTREE);
+    // Run key lookup and record amount of time required in seconds
+    const auto total_ns = RunInsertWorkload();
+    state.SetIterationTime(static_cast<double>(total_ns) / 1000000000.0);
+  }
+  // Determine total number of items processed
+  state.SetItemsProcessed(state.iterations() * table_size_);
 }
-// Determine total number of items processed
-state.SetItemsProcessed(state.iterations() * table_size_);
-}
-
 
 // ----------------------------------------------------------------------------
 // BENCHMARK REGISTRATION
