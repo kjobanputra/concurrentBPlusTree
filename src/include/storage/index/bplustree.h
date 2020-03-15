@@ -1732,7 +1732,6 @@ class BPlusTree {
     std::optional<bool> deleted;
 
     InteriorNode *save = root_;
-    /*
     save->latch_.lock_shared();
     while (save != root_) {
       save->latch_.unlock_shared();
@@ -1752,7 +1751,7 @@ class BPlusTree {
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
 #endif
       return deleted.value();
-    }*/
+    }
 
     std::vector<InteriorNode *> potential_changes;
     std::vector<uint32_t> indices;
