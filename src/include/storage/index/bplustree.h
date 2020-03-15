@@ -1649,45 +1649,44 @@ class BPlusTree {
       TERRIER_ASSERT(right->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
       TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
       return right;
-    } else {
-      TERRIER_ASSERT(left != nullptr, "Can't have an empty left if we're not deleting at index 0!");
-      uint32_t size = left->filled_keys_;
-      if (size > MIN_CHILDREN) {
-        // Borrow case
-        auto key = left->keys_[size - 1];
-        if (start == 1) {
-          // Borrow the goalpost from the parent
-          node->keys_[0] = parent->keys_[index];
-        }
-        InsertIntoNode(node, 0, key, left->values_[size - 1]);
-        RemoveFromNode(left, size - 1);
-        parent->keys_[index] = key;
-
-        if (borrowed_key != nullptr) {
-          *borrowed_key = key;
-          *borrowed_from = left;
-        }
-
-        TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-        TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-        return nullptr;
-      }
-      // Merge Case
-      uint32_t orig_size = left->filled_keys_;
-      for (uint32_t i = 0; i < node->filled_keys_; i++) {
-        left->keys_[left->filled_keys_] = node->keys_[i];
-        left->values_[left->filled_keys_] = node->values_[i];
-        left->filled_keys_++;
-      }
-
+    }
+    TERRIER_ASSERT(left != nullptr, "Can't have an empty left if we're not deleting at index 0!");
+    uint32_t size = left->filled_keys_;
+    if (size > MIN_CHILDREN) {
+      // Borrow case
+      auto key = left->keys_[size - 1];
       if (start == 1) {
-        left->keys_[orig_size] = parent->keys_[index];
+        // Borrow the goalpost from the parent
+        node->keys_[0] = parent->keys_[index];
+      }
+      InsertIntoNode(node, 0, key, left->values_[size - 1]);
+      RemoveFromNode(left, size - 1);
+      parent->keys_[index] = key;
+
+      if (borrowed_key != nullptr) {
+        *borrowed_key = key;
+        *borrowed_from = left;
       }
 
       TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
       TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
-      return left;
+      return nullptr;
     }
+    // Merge Case
+    uint32_t orig_size = left->filled_keys_;
+    for (uint32_t i = 0; i < node->filled_keys_; i++) {
+      left->keys_[left->filled_keys_] = node->keys_[i];
+      left->values_[left->filled_keys_] = node->values_[i];
+      left->filled_keys_++;
+    }
+
+    if (start == 1) {
+      left->keys_[orig_size] = parent->keys_[index];
+    }
+
+    TERRIER_ASSERT(left->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+    TERRIER_ASSERT(node->filled_keys_ <= NUM_CHILDREN, "Cant have too many filled Keys!");
+    return left;
   }
 
   std::optional<bool> TryDeleteLeaf(LeafNode *leaf, KeyType k, ValueType v, uint32_t i) {

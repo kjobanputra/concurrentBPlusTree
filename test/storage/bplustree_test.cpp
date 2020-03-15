@@ -68,7 +68,7 @@ TEST_F(BPlusTreeTests, SimpleDeleteTest) {
   }
 
   while (!key_vec_.empty()) {
-    uint32_t del_index = rand() % key_vec_.size();
+    uint32_t del_index = arc4random() % key_vec_.size();
     auto key = key_vec_[del_index];
     bool deleted = bplustree_.Delete(key, 1);
     EXPECT_TRUE(deleted);
@@ -83,12 +83,12 @@ TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
 
   bool insert = true;
   for (uint32_t i = 0; i < NUM_INSERTIONS * 5; i++) {
-    if (rand() % 5 == 0) {
+    if (arc4random() % 5 == 0) {
       // Switch phases
       insert = !insert;
     }
 
-    if (inserted_keys.size() == 0) {
+    if (inserted_keys.empty()) {
       // have to insert there's no key!
       insert = true;
     }
@@ -102,13 +102,13 @@ TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
       // Insert phase!
       uint32_t key;
       do {
-        key = rand() % NUM_INSERTIONS;
+        key = arc4random() % NUM_INSERTIONS;
       } while (inserted_keys.count(key) != 0);
       EXPECT_TRUE(bplustree_.Insert(key, 1, false, [](uint32_t val) { return false; }));
       inserted_keys.insert(key);
     } else {
       // Delete phase!
-      uint32_t key = rand() % NUM_INSERTIONS;
+      uint32_t key = arc4random() % NUM_INSERTIONS;
       if (inserted_keys.count(key) == 1) {
         EXPECT_TRUE(bplustree_.Delete(key, 1));
         inserted_keys.erase(inserted_keys.find(key));
@@ -122,27 +122,26 @@ TEST_F(BPlusTreeTests, MixedDeleteInsertTest) {
 
 // NOLINTNEXTLINE
 TEST_F(BPlusTreeTests, DuplicateTests) {
-  return;  // sppeeed
-  std::map<uint32_t, std::map<uint32_t, uint32_t>> keyvals_;
+  std::map<uint32_t, std::map<uint32_t, uint32_t>> keyvals;
   for (uint32_t i = 0; i < NUM_INSERTIONS; i++) {
     bplustree_.Insert(i, 1, true, [](uint32_t val) { return false; });
-    keyvals_[i][1] = 1;
-    while (rand() % 2 == 1) {
-      uint32_t val = rand() % 3;
+    keyvals[i][1] = 1;
+    while (arc4random() % 2 == 1) {
+      uint32_t val = arc4random() % 3;
       bplustree_.Insert(i, val, true, [](uint32_t val) { return false; });
-      keyvals_[i][val]++;
+      keyvals[i][val]++;
     }
   }
 
   for (uint32_t i = 0; i < 2 * NUM_INSERTIONS; i++) {
-    uint32_t k = rand() % NUM_INSERTIONS;
-    uint32_t v = rand() % 3;
+    uint32_t k = arc4random() % NUM_INSERTIONS;
+    uint32_t v = arc4random() % 3;
 
     bool deleted = bplustree_.Delete(k, v);
-    if (keyvals_[k][v] > 0) {
+    if (keyvals[k][v] > 0) {
       EXPECT_TRUE(deleted);
-      keyvals_[k][v]--;
-      if (keyvals_[k][v] == 0) {
+      keyvals[k][v]--;
+      if (keyvals[k][v] == 0) {
         EXPECT_TRUE(CheckDelete(k, v));
       } else {
         EXPECT_TRUE(bplustree_.IsBplusTree());
