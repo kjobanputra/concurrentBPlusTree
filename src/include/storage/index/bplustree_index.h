@@ -55,6 +55,7 @@ class BPlusTreeIndex final : public Index {
     // Register an abort action with the txn context in case of rollback
     txn->RegisterAbortAction([=]() {
       // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
+      bplustree_->Delete(index_key, location);
       const bool result = true;
       (void) result;
 
@@ -86,8 +87,7 @@ class BPlusTreeIndex final : public Index {
     if (result) {
       // Register an abort action with the txn context in case of rollback
       txn->RegisterAbortAction([=]() {
-        // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
-        const bool UNUSED_ATTRIBUTE result = true;
+        const bool UNUSED_ATTRIBUTE result = bplustree_->Delete(index_key, location);
         TERRIER_ASSERT(result, "Delete on the index failed.");
       });
     } else {
@@ -113,6 +113,7 @@ class BPlusTreeIndex final : public Index {
     txn->RegisterCommitAction([=](transaction::DeferredActionManager *deferred_action_manager) {
       deferred_action_manager->RegisterDeferredAction([=]() {
         // FIXME(15-721 project2): perform a delete from the underlying data structure of the key/value pair
+        bplustree_->Delete(index_key, location);
         const bool UNUSED_ATTRIBUTE result = true;
 
         TERRIER_ASSERT(result, "Deferred delete on the index failed.");
@@ -129,7 +130,10 @@ class BPlusTreeIndex final : public Index {
     index_key.SetFromProjectedRow(key, metadata_, metadata_.GetSchema().GetColumns().size());
 
     // Perform lookup in BPlusTree
-    auto scan_itr = bplustree_->beginGE(index_key);
+    auto scan_itr = bplustree_->BeginGreaterEqual(index_key);
+    while(!scan_itr.Valid()) {
+      scan_itr = bplustree_->BeginGreaterEqual(index_key);
+    }
     auto end_itr = bplustree_->end();
 
     if (scan_itr != end_itr && bplustree_->KeyCmpEqual(scan_itr.Key(), index_key)) {
@@ -164,7 +168,13 @@ class BPlusTreeIndex final : public Index {
     if (low_key_exists) index_low_key.SetFromProjectedRow(*low_key, metadata_, num_attrs);
     if (high_key_exists) index_high_key.SetFromProjectedRow(*high_key, metadata_, num_attrs);
 
-    auto scan_itr = low_key_exists ? bplustree_->beginGE(index_low_key) : bplustree_->begin();
+    scan_start:
+    auto scan_itr = low_key_exists ? bplustree_->BeginGreaterEqual(index_low_key) : bplustree_->begin();
+    if(low_key_exists) {
+      while (!scan_itr.Valid()) {
+        scan_itr = bplustree_->BeginGreaterEqual(index_low_key);
+      }
+    }
     auto end_itr = bplustree_->end();
 
     // Limit of 0 indicates "no limit"
@@ -178,6 +188,10 @@ class BPlusTreeIndex final : public Index {
         if (IsVisible(txn, value)) value_list->emplace_back(value);
       }
       ++scan_itr;
+      if(!scan_itr.Valid()) {
+        value_list->erase(value_list->begin(), value_list->end());
+        goto scan_start;
+      }
     }
     scan_itr.ReleaseLock();
   }
@@ -192,10 +206,18 @@ class BPlusTreeIndex final : public Index {
     index_high_key.SetFromProjectedRow(high_key, metadata_, metadata_.GetSchema().GetColumns().size());
 
     // Perform lookup in BwTree
-    auto scan_itr = bplustree_->beginLE(index_high_key);
+    scan_start:
+    auto scan_itr = bplustree_->BeginLessEqual(index_high_key);
+    while (!scan_itr.Valid()) {
+      scan_itr = bplustree_->BeginGreaterEqual(index_high_key);
+    }
     auto end_itr = bplustree_->end();
+
     // Back up one element if we didn't match the high key
     if (scan_itr == end_itr || bplustree_->KeyCmpGreater(scan_itr.Key(), index_high_key)) --scan_itr;
+    if (!scan_itr.Valid()) {
+      goto scan_start;
+    }
 
     while (scan_itr != end_itr && bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
       // Perform visibility check on result
@@ -206,6 +228,10 @@ class BPlusTreeIndex final : public Index {
         if (IsVisible(txn, value)) value_list->emplace_back(value);
       }
       --scan_itr;
+      if (!scan_itr.Valid()) {
+        value_list->erase(value_list->begin(), value_list->end());
+        goto scan_start;
+      }
     }
     scan_itr.ReleaseLock();
   }
@@ -222,11 +248,17 @@ class BPlusTreeIndex final : public Index {
     index_high_key.SetFromProjectedRow(high_key, metadata_, metadata_.GetSchema().GetColumns().size());
 
     // Perform lookup in BwTree
-
-    auto scan_itr = bplustree_->beginLE(index_high_key);
+    scan_start:
+    auto scan_itr = bplustree_->BeginLessEqual(index_high_key);
+    while (!scan_itr.Valid()) {
+      scan_itr = bplustree_->BeginGreaterEqual(index_high_key);
+    }
     auto end_itr = bplustree_->end();
     // Back up one element if we didn't match the high key
     if (scan_itr == end_itr || bplustree_->KeyCmpGreater(scan_itr.Key(), index_high_key)) --scan_itr;
+    if (!scan_itr.Valid()) {
+      goto scan_start;
+    }
 
     while (value_list->size() < limit && scan_itr != end_itr &&
            bplustree_->KeyCmpGreaterEqual(scan_itr.Key(), index_low_key)) {
@@ -238,6 +270,10 @@ class BPlusTreeIndex final : public Index {
         if (IsVisible(txn, value)) value_list->emplace_back(value);
       }
       --scan_itr;
+      if (!scan_itr.Valid()) {
+        value_list->erase(value_list->begin(), value_list->end());
+        goto scan_start;
+      }
     }
     scan_itr.ReleaseLock();
   }
