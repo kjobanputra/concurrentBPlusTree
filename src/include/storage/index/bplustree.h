@@ -680,7 +680,7 @@ class BPlusTree {
   KeyType SplitInterior(InteriorNode *from, InteriorNode *to, KeyType guide_post, InteriorNode *child) {
     // Find out where to insert this node
     uint32_t i = FindKey(from, guide_post);
-    TERRIER_ASSERT(!KeyCmpEqual(guide_post, from->keys_[i]), "We should not have duplicated guide posts!");
+    TERRIER_ASSERT(i >= from->filled_keys_ || !KeyCmpEqual(guide_post, from->keys_[i]), "We should not have duplicated guide posts!");
 
     // Perform the insert
     to->filled_keys_ = 1;

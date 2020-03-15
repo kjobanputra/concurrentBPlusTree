@@ -12,8 +12,7 @@ namespace terrier::storage::index {
 
 struct BPlusTreeTests : public TerrierTest {
  public:
-  const uint32_t num_threads_ = 4;
-  //     MultiThreadTestUtil::HardwareConcurrency() + (MultiThreadTestUtil::HardwareConcurrency() % 2);
+  const uint32_t num_threads_ = MultiThreadTestUtil::HardwareConcurrency() + (MultiThreadTestUtil::HardwareConcurrency() % 2);
 
   storage::index::BPlusTree<uint32_t, uint32_t> bplustree_;
   std::vector<uint32_t> key_vec_;
@@ -298,6 +297,7 @@ TEST_F(BPlusTreeTests, ScanDelete) {
         bool result = bplustree_.Insert(i, id * basic_test_key_num + i, true);
         EXPECT_TRUE(result);
       }
+      scan_start:
       auto scan_itr = bplustree_.begin();
       while (scan_itr != bplustree_.end()) {
         uint32_t key = scan_itr.Key();
@@ -313,11 +313,15 @@ TEST_F(BPlusTreeTests, ScanDelete) {
         }
         EXPECT_EQ(count, 1);
         ++scan_itr;
+        if(!scan_itr.Valid()) {
+          goto scan_start;
+        }
       }
       for (uint32_t i = 0; i < basic_test_key_num; i++) {
         bool result = bplustree_.Delete(i, id * basic_test_key_num + i);
         EXPECT_TRUE(result);
       }
+      scan_start_2:
       scan_itr = bplustree_.begin();
       while (scan_itr != bplustree_.end()) {
         uint32_t key = scan_itr.Key();
@@ -333,6 +337,9 @@ TEST_F(BPlusTreeTests, ScanDelete) {
         }
         EXPECT_EQ(count, 0);
         ++scan_itr;
+        if(!scan_itr.Valid()) {
+          goto scan_start_2;
+        }
       }
     }
   };
