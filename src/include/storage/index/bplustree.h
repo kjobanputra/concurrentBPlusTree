@@ -128,6 +128,10 @@ class MemoryPool {
         goto realloc;
     }
 
+    if(free_elems == 0) {
+      prev->store(current->next_.load());
+    }
+
     memset(&current->elems_[i], 0, sizeof(T));
     return &current->elems_[i];
   }
@@ -144,6 +148,15 @@ class MemoryPool {
       free_elems = node->free_elems_;
       new_free = (((free_elems >> i) | 1) << i) | ((free_elems << i) >> i);
     } while (!std::atomic_compare_exchange_weak((&node->free_elems_), &free_elems, new_free));
+
+    if(free_elems == 0) {
+      // reinsert
+      Node *next;
+      do {
+        node->next_.store(start_.load());
+        next = node->next_.load();
+      } while (!std::atomic_compare_exchange_weak(&start_, &next, node));
+    }
   }
 };
 
