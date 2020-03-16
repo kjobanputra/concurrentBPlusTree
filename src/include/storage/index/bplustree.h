@@ -78,8 +78,6 @@ constexpr std::chrono::duration TIMEOUT = std::chrono::nanoseconds(100);
  */
 constexpr uint32_t MIN_CHILDREN = NUM_CHILDREN / 2 + NUM_CHILDREN % 2;
 
-enum class SiblingType { Left, Right, Neither };
-
 template <typename T>
 class MemoryPool {
  private:
@@ -150,12 +148,28 @@ class MemoryPool {
 };
 
 #ifndef NDEBUG
+/**
+ * A lock for use in debug mode to make sure lock invariants are held.
+ */
 class DebugLock : public std::shared_timed_mutex {
  public:
+  /**
+   * The writer thread holding the lock
+   */
   std::atomic<std::thread::id> holder_;
+  /**
+   * The number of readers holding this lock
+   */
   std::atomic<uint32_t> shared_holders_;
 
+  /**
+   * A stored backtrace from the writer who last locked this
+   */
   void *trace_[10];
+
+  /**
+   * The length of the backtrace of the writer who last locked this.
+   */
   std::atomic<size_t> size_;
   void lock_shared() {  // NOLINT for name compatibility
     std::shared_timed_mutex::lock_shared();
@@ -196,6 +210,9 @@ class DebugLock : public std::shared_timed_mutex {
     std::shared_timed_mutex::unlock();
   }
 
+  /**
+   * Prints a stack trace from the last writer locking
+   */
   void StackTrace() { backtrace_symbols_fd(trace_, size_, STDERR_FILENO); }
 };
 #endif  // NDEBUG
@@ -221,10 +238,16 @@ class BPlusTree {
     friend class BPlusTree;
     static MemoryPool<OverflowNode> mem_pool;
 
+    /**
+     * Creates a new overflow node from the memory pool.
+     */
     static OverflowNode *CreateNew() {
       return mem_pool.alloc();
     }
 
+    /**
+     * Releases an overflow node back into the memory pool.
+     */
     static void Delete(OverflowNode *elem) { mem_pool.Delete(elem); }
   };
 
@@ -303,6 +326,9 @@ class BPlusTree {
       return true;
     }
 
+    /**
+     * Gets the amount of heap space used by this node.
+     */
     size_t GetHeapUsage() {
       size_t usage = sizeof(LeafNode);
 
@@ -314,6 +340,9 @@ class BPlusTree {
 
     friend class BPlusTree;
 
+    /**
+     * Creates a new leaf node from the memory pool.
+     */
     static LeafNode *CreateNew() {
       LeafNode *node = mem_pool.alloc();
       // Initialize the shared mutex
@@ -321,11 +350,17 @@ class BPlusTree {
       return node;
     }
 
+    /**
+     * Releases a leaf node to the memory pool.
+     */
     static void Delete(LeafNode *elem) { mem_pool.Delete(elem); }
   };
 
   class InteriorNode;
 
+  /**
+   * The possible children of an interior node.
+   */
   union Child {
     InteriorNode *as_interior_;
     LeafNode *as_leaf_;
@@ -461,6 +496,9 @@ class BPlusTree {
       return true;
     }
 
+    /**
+     * Gets the heap usage of this node, in bytes.
+     */
     size_t GetHeapUsage() {
       size_t usage = sizeof(InteriorNode);
 
@@ -477,6 +515,9 @@ class BPlusTree {
 
     friend class BPlusTree;
 
+    /**
+     * Creates a new InteriorNode from the memory pool.
+     */
     static InteriorNode *CreateNew() {
       InteriorNode *node = mem_pool.alloc();
       // Initialize the shared mutex
@@ -484,6 +525,9 @@ class BPlusTree {
       return node;
     }
 
+    /**
+     * Releases an InteriorNode back into the memory pool.
+     */
     static void Delete(InteriorNode *elem) { mem_pool.Delete(elem); }
   };
 
@@ -815,6 +859,10 @@ class BPlusTree {
   }
 
  public:
+  /**
+   * Creates the BPlusTree as an empty tree, with the given comparators
+   * @param allow_duplicates Whether this tree should allow duplicatees.
+   */
   explicit BPlusTree(bool allow_duplicates, KeyComparator key_cmp_obj = KeyComparator{},
                      KeyEqualityChecker key_eq_obj = KeyEqualityChecker{}, KeyHashFunc key_hash_obj = KeyHashFunc{},
                      ValueEqualityChecker value_eq_obj = ValueEqualityChecker{})
@@ -991,6 +1039,11 @@ class BPlusTree {
         : tree_(tree), current_(current), index_(index), valid_(true) {}
 
    public:
+    /**
+     * KeyIterators can be invalidated if they are advancing and encounter a situation
+     * which would cause a deadlock. Use this to check for that and restart a scan.
+     * @returns true if valid, false otherwise.
+     */
     bool Valid() const { return valid_; }
 
     /**
@@ -1232,6 +1285,12 @@ class BPlusTree {
     return {this, next, 0};
   }
 
+  /**
+   * Gets an iterator pointing to the right-most value in the tree <= to the passed-in
+   * key. Can be the end iterator if all keys are > than the key.
+   * @param key The key to compare.
+   * @returns The iterator, with a lock on the leaf (if there is one)
+   */
   KeyIterator BeginLessEqual(const KeyType &key) const {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "begin must be called on a valid B+ Tree");
@@ -1280,10 +1339,22 @@ class BPlusTree {
     return {this, leaf, index};
   }
 
+  /**
+   * Gets the end iterator.
+   */
   const KeyIterator end() const {  // NOLINT for STL name compability
     return {this, nullptr, 0};
   }
 
+  /**
+   * Inserts a key/value pair into the bplustree.
+   * @param k The key to insert at
+   * @param v The value to insert
+   * @param allow_duplicates Whether to allow duplicates for this insertion
+   * @param predicate If there are no duplicates, this function can allow you to optionally
+   * override a value if it returns true for that value.
+   * @returns true if the insert was successful, false otherwise.
+   */
   bool Insert(
       KeyType k, ValueType v, bool allow_duplicates = true,
       const std::function<bool(const ValueType &)> &predicate = [](ValueType v) { return false; }) {
@@ -1438,7 +1509,18 @@ class BPlusTree {
     return true;
   }
 
-  // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
+  /**
+   * Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
+   * @param root The root of the tree to traverse.
+   * @param k The key to look for
+   * @param potential_changes A vector which will be filled with potential interior nodes which need changing.
+   * @param indices A vector which will be filled with various indices we take as we go down the tree.
+   * @param left_siblings A vector which will be filled with the current left sibling of the interior node at
+   * the equivalent node in potential_changes. Could be nullptr if at the left edge.
+   * @param right_siblings A vector which will be filled with the current right sibling of the interior node at
+   * the equivalent node in potential_changes. Could be nullptr if at the right edge.
+   * @returns The leaf node at the bottom which we find.
+   */
   LeafNode *TraverseTrackWithSiblings(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes,
                                       std::vector<uint32_t> *indices, std::vector<InteriorNode *> *left_siblings,
                                       std::vector<InteriorNode *> *right_siblings) {
@@ -1518,6 +1600,14 @@ class BPlusTree {
     return leaf;
   }
 
+  /**
+   * Removes a key/value pair from the overflow node.
+   * @param overflow A pointer to the location of the first overflow node in the chain.
+   * @param k The key to remove.
+   * @param v A pointer to the value to remove, or nullptr if we should remove an arbitrary value.
+   * @param result A pointer which gets filled with the value of the entry removed
+   * @returns true if a value was removed, false otherwise.
+   */
   bool RemoveFromOverflow(OverflowNode **overflow, KeyType k, ValueType *v, ValueType *result) {
     OverflowNode *current = *overflow;
     OverflowNode **prev_next = overflow;
@@ -1572,6 +1662,11 @@ class BPlusTree {
     return deleted;
   }
 
+  /**
+   * Merges two overflow nodes into one.
+   * @param pointer The location of the primary OverflowNode chain to merge into.
+   * @param other A pointer to the OverflowNode chain to merge in.
+   */
   void MergeOverflow(OverflowNode **pointer, OverflowNode *other) {
     if (other == nullptr) return;  // No merging
 
@@ -1607,6 +1702,12 @@ class BPlusTree {
     }
   }
 
+  /**
+   * "Steals" elements with a specific key from one chain of OverflowNodes.
+   * @param pointer The location of the primary OverflowNode chain to steal into.
+   * @param other A pointer to the chain of OverflowNodes to steal from
+   * @param key The key whose entries we should steal.
+   */
   void StealOverflow(OverflowNode **pointer, OverflowNode *other, KeyType key) {
     if (other == nullptr) {
       return;  // Nothing to steal!
@@ -1660,6 +1761,11 @@ class BPlusTree {
     }
   }
 
+  /**
+   * Removes a key/value pair from a node.
+   * @param node The node to remove from.
+   * @param index The index to remove at.
+   */
   template <typename Value>
   void RemoveFromNode(GenericNode<Value> *node, uint32_t index) {
     TERRIER_ASSERT(index < node->filled_keys_, "Not a valid index for removal!");
@@ -1670,6 +1776,18 @@ class BPlusTree {
     node->filled_keys_--;
   }
 
+  /**
+   * Rebalances a given node, potentially taking keys/values from a node to the left or the right.
+   * @param node The node which has not enough keys and needs more.
+   * @param left The left sibling of the node, or nullptr for no left sibling.
+   * @param right The right sibling of the node, or nullptr for no right sibling.
+   * @param start The start index of keys in the node (1 or 0)
+   * @param parent The parent of these nodes.
+   * @param index The index of node in parent.
+   * @param borrowed_key A pointer to be filled with the key if a borrow occurred.
+   * @param borrowed_from A pointer to be filled with left or right if a borrow occurred from them.
+   * @returns The primary node if "node" was deleted, or nullptr if a borrow occurred.
+   */
   template <typename Value>
   GenericNode<Value> *Rebalance(GenericNode<Value> *node, GenericNode<Value> *left, GenericNode<Value> *right,
                                 uint32_t start, InteriorNode *parent, uint32_t index, KeyType *borrowed_key,
@@ -1760,6 +1878,15 @@ class BPlusTree {
     return left;
   }
 
+  /**
+   * Attempts to delete a key/value pair from a leaf, if it does not cause rebalancing.
+   * @param leaf The leaf to delete from.
+   * @param k The key to delete.
+   * @param v The value to delete.
+   * @param i The index of k/v in the leaf.
+   * @returns nullopt if we need to rebalance, true if the deletion occurred with no rebalance,
+   * and false if it did not occur.
+   */
   std::optional<bool> TryDeleteLeaf(LeafNode *leaf, KeyType k, ValueType v, uint32_t i) {
     // Can't delete a key that doesn't exist in the tree
     if (i >= leaf->filled_keys_ || !KeyCmpEqual(k, leaf->keys_[i])) {
@@ -1792,6 +1919,12 @@ class BPlusTree {
     return std::nullopt;
   }
 
+  /**
+   * Deletes the key/value pair from this tree.
+   * @param k The key to delete.
+   * @param v The value to delete.
+   * @returns true if the delete was successful (i.e. k/v existed in the tree), false otherwise.
+   */
   bool Delete(KeyType k, ValueType v) {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
@@ -2026,6 +2159,9 @@ class BPlusTree {
     return true;
   }
 
+  /**
+   * Gets the heap usage of the entire tree, in bytes.
+   */
   size_t GetHeapUsage() const {
 #ifdef DEEP_DEBUG
     TERRIER_ASSERT(IsBplusTree(), "GetHeapUsage mulsled on a valid B+ Tree");
