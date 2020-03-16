@@ -1368,13 +1368,13 @@ class BPlusTree {
   }
 
   // Traverses tree to correct key, keeping track of siblings and indices needed to get to child or value.
-  LeafNode *TraverseTrackWithSiblings(InteriorNode *root, KeyType k, std::vector<InteriorNode *> &potential_changes,
-                                      std::vector<uint32_t> *indices, std::vector<InteriorNode *> &left_siblings,
-                                      std::vector<InteriorNode *> &right_siblings) {
-    potential_changes.reserve(depth_);
+  LeafNode *TraverseTrackWithSiblings(InteriorNode *root, KeyType k, std::vector<InteriorNode *> *potential_changes,
+                                      std::vector<uint32_t> *indices, std::vector<InteriorNode *> *left_siblings,
+                                      std::vector<InteriorNode *> *right_siblings) {
+    potential_changes->reserve(depth_);
     indices->reserve(depth_);
-    left_siblings.reserve(depth_);
-    right_siblings.reserve(depth_);
+    left_siblings->reserve(depth_);
+    right_siblings->reserve(depth_);
 
     LeafNode *leaf = nullptr;
     InteriorNode *current = root;
@@ -1386,31 +1386,31 @@ class BPlusTree {
       // This is the case where we know the current level will not need to merge. We don't need to keep track of the
       // parents anymore. We preserve the last node since future levels could potentially need it.
       if (current->filled_keys_ > MIN_CHILDREN) {
-        for (const auto &interior : potential_changes) {
+        for (const auto &interior : *potential_changes) {
           interior->latch_.unlock();
         }
-        for (const auto &interior : left_siblings) {
+        for (const auto &interior : *left_siblings) {
           if (interior != nullptr) {
             interior->latch_.unlock();
           }
         }
-        for (const auto &interior : right_siblings) {
+        for (const auto &interior : *right_siblings) {
           if (interior != nullptr) {
             interior->latch_.unlock();
           }
         }
-        potential_changes.erase(potential_changes.begin(), potential_changes.end());
-        left_siblings.erase(left_siblings.begin(), left_siblings.end());
-        right_siblings.erase(right_siblings.begin(), right_siblings.end());
+        potential_changes->erase(potential_changes->begin(), potential_changes->end());
+        left_siblings->erase(left_siblings->begin(), left_siblings->end());
+        right_siblings->erase(right_siblings->begin(), right_siblings->end());
         indices->erase(indices->begin(), indices->end());
       }
 
       // Index in potential_changes.end() that will get you to next child
       i = FindKey(current, k) - 1;
       indices->push_back(i);
-      left_siblings.push_back(left);
-      right_siblings.push_back(right);
-      potential_changes.push_back(current);
+      left_siblings->push_back(left);
+      right_siblings->push_back(right);
+      potential_changes->push_back(current);
 
       // Only add the right sibling (potential right merge/borrow node) if leftmost node
       if (current->leaf_children_) {
@@ -1744,7 +1744,7 @@ class BPlusTree {
 
     deleted = TryDeleteLeaf(leaf, k, v, i);
     leaf->latch_.unlock();
-    if(deleted.has_value()) {
+    if (deleted.has_value()) {
       // Successfully deleted without rebalancing!
 #ifdef DEEP_DEBUG
       TERRIER_ASSERT(IsBplusTree(), "Deleting a key requires a valid B+tree");
@@ -1765,7 +1765,7 @@ class BPlusTree {
       save->latch_.lock();
     }
 
-    leaf = TraverseTrackWithSiblings(root_, k, potential_changes, &indices, left_siblings, right_siblings);
+    leaf = TraverseTrackWithSiblings(root_, k, &potential_changes, &indices, &left_siblings, &right_siblings);
 
     i = FindKey(leaf, k);
 
