@@ -80,6 +80,75 @@ constexpr uint32_t MIN_CHILDREN = NUM_CHILDREN / 2 + NUM_CHILDREN % 2;
 
 enum class SiblingType { Left, Right, Neither };
 
+template <typename T>
+class MemoryPool {
+ private:
+  class alignas(262144) Node {
+    T elems_[64];
+    std::atomic<uint64_t> free_elems_;
+    std::atomic<Node*> next_;
+    friend class MemoryPool;
+  };
+
+  std::atomic<Node*> start_;
+
+ public:
+  T* alloc() {
+    Node *current = start_;
+    std::atomic<Node*> *prev = &start_;
+    restart:
+    while(current != nullptr && current->free_elems_ != 0) {
+      prev = &current->next_;
+      current = current->next_;
+    }
+
+    if(current == nullptr) {
+      auto *newNode = reinterpret_cast<Node*>(std::calloc(sizeof(Node), 1));
+      newNode->free_elems_ = -1;
+      Node *elem = nullptr;
+      while(!std::atomic_compare_exchange_weak(prev, &elem, newNode)) {
+        if(*prev == nullptr) continue;
+        current = *prev;
+        prev = &(current->next_);
+      }
+      current = newNode;
+    }
+
+    realloc:
+    uint64_t free_elems = current->free_elems_;
+    if(free_elems == 0) {
+      goto restart;
+    }
+    uint32_t i = 0;
+    while((free_elems & 1) == 0) {
+      i++;
+      free_elems = free_elems >> 1;
+    }
+
+    uint64_t new_free = (free_elems & 0xFFFFFFFFFFFFFFFE) << i;
+    if(!std::atomic_compare_exchange_strong(&(current->free_elems_), &free_elems, new_free)) {
+        goto realloc;
+    }
+
+    memset(&current->elems_[i], 0, sizeof(T));
+    return &current->elems_[i];
+  }
+
+  void Delete(T *elem) {
+    uintptr_t elem_ptr = reinterpret_cast<uintptr_t>(elem);
+    uintptr_t node_ptr = elem_ptr & 0xFFFFFFFFFFFC0000;
+    Node *node = reinterpret_cast<Node*>(node_ptr);
+
+    uint32_t i = (elem_ptr - node_ptr) / sizeof(T);
+    uint64_t free_elems;
+    uint64_t new_free;
+    do {
+      free_elems = node->free_elems_;
+      new_free = (((free_elems >> i) | 1) << i) | ((free_elems << i) >> i);
+    } while (!std::atomic_compare_exchange_weak((&node->free_elems_), &free_elems, new_free));
+  }
+};
+
 #ifndef NDEBUG
 class DebugLock : public std::shared_timed_mutex {
  public:
@@ -136,7 +205,7 @@ template <typename KeyType, typename ValueType, typename KeyComparator = std::le
           typename ValueEqualityChecker = std::equal_to<ValueType>>
 class BPlusTree {
  private:
-  static execution::sql::MemoryPool mem_pool;
+
 
   /**
    * This inner class defines what an overflow node looks like. An overflow node
@@ -150,13 +219,13 @@ class BPlusTree {
     OverflowNode *next_;
 
     friend class BPlusTree;
+    static MemoryPool<OverflowNode> mem_pool;
 
     static OverflowNode *CreateNew() {
-      auto *node = reinterpret_cast<OverflowNode *>(mem_pool.Allocate(sizeof(OverflowNode), true));
-      return node;
+      return mem_pool.alloc();
     }
 
-    static void Delete(OverflowNode *elem) { mem_pool.Deallocate(elem, sizeof(OverflowNode)); }
+    static void Delete(OverflowNode *elem) { mem_pool.Delete(elem); }
   };
 
   /**
@@ -190,6 +259,7 @@ class BPlusTree {
     LeafNode *prev_;
     LeafNode *next_;
     OverflowNode *overflow_;
+    static MemoryPool<LeafNode> mem_pool;
 
     bool Contains(KeyType k, const BPlusTree *parent) const {
       for (uint32_t i = 0; i < this->filled_keys_; i++) {
@@ -245,13 +315,13 @@ class BPlusTree {
     friend class BPlusTree;
 
     static LeafNode *CreateNew() {
-      auto *node = reinterpret_cast<LeafNode *>(mem_pool.Allocate(sizeof(class LeafNode), true));
+      LeafNode *node = mem_pool.alloc();
       // Initialize the shared mutex
       new (&node->latch_) std::shared_timed_mutex();
       return node;
     }
 
-    static void Delete(LeafNode *elem) { mem_pool.Deallocate(elem, sizeof(class LeafNode)); }
+    static void Delete(LeafNode *elem) { mem_pool.Delete(elem); }
   };
 
   class InteriorNode;
@@ -273,6 +343,7 @@ class BPlusTree {
   class InteriorNode : public GenericNode<Child> {
    private:
     bool leaf_children_;
+    static MemoryPool<InteriorNode> mem_pool;
 
     /**
      * Gets a reference to the i^th child assuming that the children of this node
@@ -407,13 +478,13 @@ class BPlusTree {
     friend class BPlusTree;
 
     static InteriorNode *CreateNew() {
-      auto *node = reinterpret_cast<InteriorNode *>(mem_pool.Allocate(sizeof(class InteriorNode), true));
+      InteriorNode *node = mem_pool.alloc();
       // Initialize the shared mutex
       new (&node->latch_) std::shared_timed_mutex();
       return node;
     }
 
-    static void Delete(InteriorNode *elem) { mem_pool.Deallocate(elem, sizeof(class InteriorNode)); }
+    static void Delete(InteriorNode *elem) { mem_pool.Delete(elem); }
   };
 
   InteriorNode *root_;
@@ -1965,8 +2036,23 @@ class BPlusTree {
 
 template <typename KeyType, typename ValueType, typename KeyComparator, typename KeyEqualityChecker,
           typename KeyHashFunc, typename ValueEqualityChecker>
-execution::sql::MemoryPool BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc,
-                                     ValueEqualityChecker>::mem_pool{nullptr};
+MemoryPool<class BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc, ValueEqualityChecker>::OverflowNode>
+    BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc,
+                                     ValueEqualityChecker>::OverflowNode::mem_pool;
+
+
+template <typename KeyType, typename ValueType, typename KeyComparator, typename KeyEqualityChecker,
+    typename KeyHashFunc, typename ValueEqualityChecker>
+MemoryPool<class BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc, ValueEqualityChecker>::LeafNode>
+    BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc,
+        ValueEqualityChecker>::LeafNode::mem_pool;
+
+
+template <typename KeyType, typename ValueType, typename KeyComparator, typename KeyEqualityChecker,
+    typename KeyHashFunc, typename ValueEqualityChecker>
+MemoryPool<class BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc, ValueEqualityChecker>::InteriorNode>
+    BPlusTree<KeyType, ValueType, KeyComparator, KeyEqualityChecker, KeyHashFunc,
+        ValueEqualityChecker>::InteriorNode::mem_pool;
 
 #undef CHECK
 #undef CHECK_LT
