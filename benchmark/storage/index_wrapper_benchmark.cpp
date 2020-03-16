@@ -44,6 +44,8 @@ class IndexBenchmark : public benchmark::Fixture {
   storage::SqlTable *sql_table_;
   storage::ProjectedRowInitializer tuple_initializer_ =
       storage::ProjectedRowInitializer::Create(std::vector<uint16_t>{1}, std::vector<uint16_t>{1});  // This is a dummy
+  std::vector<storage::TupleSlot> stored_results_;
+  std::vector<uint32_t> random_keys_;
 
   // HashIndex or BwTreeIndex
   common::ManagedPointer<storage::index::Index> index_;
@@ -158,6 +160,8 @@ class IndexBenchmark : public benchmark::Fixture {
         index_->ScanKey(*scan_txn, *scan_key_pr, &results);
       }
       EXPECT_EQ(results.size(), 1);
+      stored_results_.push_back(results.front());
+      random_keys_.push_back(random_key);
       results.clear();
       total_ns += elapsed_ns;
     }
@@ -193,26 +197,6 @@ class IndexBenchmark : public benchmark::Fixture {
   }
 
   uint64_t RunDeleteWorkload() {
-    auto *const scan_key_pr = index_->GetProjectedRowInitializer().InitializeRow(key_buffer_);
-    auto *scan_txn = txn_manager_->BeginTransaction();
-    std::vector<storage::TupleSlot> stored_results;
-    std::vector<uint32_t> random_keys;
-
-    std::vector<storage::TupleSlot> results;
-    // Get random key table_size times and measure time elapsed for search operation
-    for (uint32_t i = 0; i < table_size_; i++) {
-      const uint32_t random_key =
-          std::uniform_int_distribution(static_cast<uint32_t>(0), static_cast<uint32_t>(table_size_ - 1))(generator_);
-      *reinterpret_cast<uint32_t *>(scan_key_pr->AccessForceNotNull(0)) = random_key;
-      {
-        index_->ScanKey(*scan_txn, *scan_key_pr, &results);
-      }
-      EXPECT_EQ(results.size(), 1);
-      stored_results.push_back(results[0]);
-      random_keys.push_back(random_key);
-      results.clear();
-    }
-
     auto *const delete_key = index_->GetProjectedRowInitializer().InitializeRow(key_buffer_);
     auto *const delete_txn = txn_manager_->BeginTransaction();
     uint64_t total_ns = 0;
@@ -220,14 +204,14 @@ class IndexBenchmark : public benchmark::Fixture {
 
     // Get random key table_size times and measure time elapsed for search operation
     for (uint32_t i = 0; i < table_size_; i++) {
-      delete_txn->StageDelete(CatalogTestUtil::TEST_DB_OID, CatalogTestUtil::TEST_TABLE_OID, stored_results[i]);
-      sql_table_->Delete(common::ManagedPointer(delete_txn), stored_results[i]);
-      *reinterpret_cast<int32_t *>(delete_key->AccessForceNotNull(0)) = random_keys[i];
+      delete_txn->StageDelete(CatalogTestUtil::TEST_DB_OID, CatalogTestUtil::TEST_TABLE_OID, stored_results_[i]);
+      sql_table_->Delete(common::ManagedPointer(delete_txn), stored_results_[i]);
+      *reinterpret_cast<int32_t *>(delete_key->AccessForceNotNull(0)) = random_keys_[i];
 
       // Ensure that delete action appropriately listed
       {
         common::ScopedTimer<std::chrono::nanoseconds> timer(&elapsed_ns);
-        index_->Delete(common::ManagedPointer(delete_txn), *delete_key, stored_results[i]);
+        index_->Delete(common::ManagedPointer(delete_txn), *delete_key, stored_results_[i]);
       }
       total_ns += elapsed_ns;
     }
@@ -365,16 +349,17 @@ BENCHMARK_DEFINE_F(IndexBenchmark, BPlusTreeIndexDelete)(benchmark::State &state
 // BENCHMARK REGISTRATION
 // ----------------------------------------------------------------------------
 // clang-format off
-/* For benchmarking we just need the BPlus tree stuff
+// For benchmarking we just need the BPlus tree stuff
 BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexRandomScanKey)
-    ->UseManualTime()
-    ->Unit(benchmark::kMillisecond);
-BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexInsert)
     ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
 BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexDelete)
     ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(IndexBenchmark, BwTreeIndexInsert)
+    ->UseManualTime()
+    ->Unit(benchmark::kMillisecond);
+/*
 BENCHMARK_REGISTER_F(IndexBenchmark, HashIndexRandomScanKey)
     ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
@@ -383,14 +368,15 @@ BENCHMARK_REGISTER_F(IndexBenchmark, HashIndexInsert)
   ->Unit(benchmark::kMillisecond);
   */
 BENCHMARK_REGISTER_F(IndexBenchmark, BPlusTreeIndexRandomScanKey)
-  ->UseManualTime()
+    ->UseManualTime()
+    ->Unit(benchmark::kMillisecond);
+BENCHMARK_REGISTER_F(IndexBenchmark, BPlusTreeIndexDelete)
+    ->UseManualTime()
     ->Unit(benchmark::kMillisecond);
 BENCHMARK_REGISTER_F(IndexBenchmark, BPlusTreeIndexInsert)
-  ->UseManualTime()
-  ->Unit(benchmark::kMillisecond);
-BENCHMARK_REGISTER_F(IndexBenchmark, BPlusTreeIndexDelete)
-  ->UseManualTime()
-  ->Unit(benchmark::kMillisecond);
+    ->UseManualTime()
+    ->Unit(benchmark::kMillisecond);
+
 // clang-format on
 
 }  // namespace terrier
