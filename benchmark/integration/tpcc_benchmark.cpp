@@ -187,7 +187,7 @@ BENCHMARK_DEFINE_F(TPCCBenchmark, ScaleFactor4WithLogging)(benchmark::State &sta
                          common::ManagedPointer(&txn_manager)};
 
     // build the TPCC database
-    auto *const tpcc_db = tpcc_builder.Build(storage::index::IndexType::HASHMAP);
+    auto *const tpcc_db = tpcc_builder.Build(storage::index::IndexType::BPLUSTREE);
 
     // prepare the workers
     workers.clear();
@@ -285,7 +285,7 @@ BENCHMARK_DEFINE_F(TPCCBenchmark, ScaleFactor4WithLoggingAndMetrics)(benchmark::
                          common::ManagedPointer(&txn_manager)};
 
     // build the TPCC database using HashMaps where possible
-    auto *const tpcc_db = tpcc_builder.Build(storage::index::IndexType::HASHMAP);
+    auto *const tpcc_db = tpcc_builder.Build(storage::index::IndexType::BPLUSTREE);
 
     // prepare the workers
     workers.clear();
